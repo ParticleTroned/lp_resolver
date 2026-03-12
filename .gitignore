@@ -1,0 +1,17 @@
+﻿__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.spec
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+.env
+
+build/
+dist/
+
+resolver_decisions.json
+output/*
+!output/.gitkeep

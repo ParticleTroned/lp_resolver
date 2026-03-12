@@ -1,0 +1,29 @@
+﻿[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lp-conflict-resolver"
+version = "0.1.2"
+description = "MO2 Light Placer and Particle Lights conflict scanner and patch exporter"
+readme = "README.md"
+license = "GPL-3.0-only"
+requires-python = ">=3.10"
+authors = [
+  { name = "LP Conflict Resolver Project" }
+]
+dependencies = [
+  "PySide6>=6.7.0,<7"
+]
+
+[project.optional-dependencies]
+build = [
+  "pyinstaller>=6.0.0,<7"
+]
+
+[project.scripts]
+lp-resolver = "lp_resolver.cli:main"
+lp-resolver-gui = "lp_resolver.gui:main"
+
+[tool.setuptools]
+packages = ["lp_resolver"]
