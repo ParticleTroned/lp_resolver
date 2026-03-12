@@ -16,6 +16,7 @@ from .engine import ScanConfig, ScanResult, run_scan
 from .models import Conflict
 from .nif_preview import load_mesh_preview_for_nif, load_nif_bounding_radius_for_nif
 from .patch_writer import write_patch_mod
+from .priority import choose_keep_highest_entry, entry_priority_sort_key
 
 try:
     from PySide6.QtCore import QItemSelectionModel, QObject, QPointF, QSettings, Qt, QThread, QUrl, Signal, Slot
@@ -1370,8 +1371,14 @@ class MainWindow(QMainWindow):
         )
         apply_highest_duplicates_btn.setToolTip(
             "Bulk action: set decision 'keep_highest_priority' for duplicate conflicts.\n"
-            "Winner criteria (deterministic): highest source_priority first (MO2 priority; larger wins),\n"
-            "then source_mod name, source_file path, and entry_id as tie-breakers.\n"
+            "Winner criteria (deterministic):\n"
+            "1) MO2 position (source_priority; larger wins)\n"
+            "2) For divergent duplicates with same worldspace context, PortalStrict preferred\n"
+            "3) Larger radius\n"
+            "4) Higher fade\n"
+            "5) source_mod\n"
+            "6) source_file\n"
+            "7) entry_id\n"
             "Use with care: avoid this when duplicates are intentional refinements,\n"
             "worldspace-split variants, or hand-tuned multi-light compositions."
         )
@@ -1491,7 +1498,13 @@ class MainWindow(QMainWindow):
             "Resolution action for selected conflict:\n"
             "- Ignore: leave unchanged\n"
             "- Keep Highest: keep one LP entry by deterministic priority order:\n"
-            "  source_priority (MO2; larger wins) -> source_mod -> source_file -> entry_id\n"
+            "  1) source_priority (MO2; larger wins)\n"
+            "  2) For divergent duplicates with same worldspace context, PortalStrict preferred\n"
+            "  3) larger radius\n"
+            "  4) higher fade\n"
+            "  5) source_mod\n"
+            "  6) source_file\n"
+            "  7) entry_id\n"
             "- Choose Entries: keep selected LP entries (multi-select)\n"
             "- Disable LP: export no LP entries for this NIF\n"
             "Note: Keep Highest is not quality-aware; it only follows priority/tie-break order.\n"
@@ -2712,14 +2725,11 @@ class MainWindow(QMainWindow):
             elif decision.action in {"keep_highest_priority", "choose_entry"} and conflict.lp_entries:
                 sorted_entries = sorted(
                     conflict.lp_entries,
-                    key=lambda item: (
-                        item.source_priority,
-                        item.source_mod.lower(),
-                        item.source_file.lower(),
-                        item.entry_id,
-                    ),
+                    key=entry_priority_sort_key,
                 )
-                highest = sorted_entries[-1]
+                highest = choose_keep_highest_entry(conflict.lp_entries, conflict_types=conflict.conflict_types)
+                if highest is None:
+                    highest = sorted_entries[-1]
                 if decision.action == "choose_entry":
                     selected_ids = list(decision.entry_ids)
                     if not selected_ids and decision.entry_id:

@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from .decisions import Decision
 from .engine import ScanResult
 from .models import LightPlacerEntry
+from .priority import choose_keep_highest_entry, entry_priority_sort_key
 from .reporting import render_markdown_report
 
 MANAGED_FILES_VERSION = 1
@@ -36,14 +37,17 @@ def _select_entry_for_decision(
     decision: Decision,
     warnings: list[str],
     nif_path: str,
+    conflict_types: list[str] | None = None,
 ) -> list[LightPlacerEntry]:
     if not entries:
         return []
     sorted_entries = sorted(
         entries,
-        key=lambda item: (item.source_priority, item.source_mod.lower(), item.source_file.lower(), item.entry_id),
+        key=entry_priority_sort_key,
     )
-    highest_priority_entry = sorted_entries[-1]
+    highest_priority_entry = choose_keep_highest_entry(entries, conflict_types=conflict_types)
+    if highest_priority_entry is None:
+        return []
 
     if decision.action == "disable_lp":
         return []
@@ -147,10 +151,15 @@ def write_patch_mod(
     patch_mod_dir.mkdir(parents=True, exist_ok=True)
 
     lp_entries_by_nif: dict[str, list[LightPlacerEntry]] = {}
+    conflict_types_by_nif: dict[str, set[str]] = {}
     lp_entries_by_source_file_all: dict[str, list[LightPlacerEntry]] = {}
     for entry in scan_result.lp_entries:
         lp_entries_by_nif.setdefault(entry.nif_path_canonical, []).append(entry)
         lp_entries_by_source_file_all.setdefault(entry.source_file, []).append(entry)
+    for conflict in scan_result.detected_conflicts:
+        conflict_types_by_nif.setdefault(conflict.nif_path_canonical, set()).update(conflict.conflict_types)
+    for conflict in scan_result.conflicts:
+        conflict_types_by_nif.setdefault(conflict.nif_path_canonical, set()).update(conflict.conflict_types)
 
     winning_priority_by_source_file: dict[str, int] = {}
     for source_file, entries in lp_entries_by_source_file_all.items():
@@ -180,7 +189,14 @@ def write_patch_mod(
             warnings.append(f"{nif_path}: decision '{decision.action}' had no matching LP entries in current scan.")
             continue
 
-        chosen_entries = _select_entry_for_decision(entries, decision, warnings, nif_path)
+        conflict_types = sorted(conflict_types_by_nif.get(nif_path, set()))
+        chosen_entries = _select_entry_for_decision(
+            entries,
+            decision,
+            warnings,
+            nif_path,
+            conflict_types=conflict_types,
+        )
         for entry in entries:
             selected_entry_ids.discard(entry.entry_id)
         for entry in chosen_entries:

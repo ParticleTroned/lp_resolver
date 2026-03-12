@@ -1,5 +1,5 @@
 # Placed Lights and Particle Lights Conflict Resolver  
-Version: 0.1.3
+Version: 0.1.4
 
 This guide is for first-time users. It explains what the tool changes, how MO2 load order affects results, and how to export a safe patch.
 
@@ -58,7 +58,7 @@ Why this matters:
 6. Optional: right-click selected conflict row(s) to open contributing source folder(s) in Windows Explorer.
 7. Choose decision in `Action`:
 - `Ignore`
-- `Keep Highest Priority LP`
+- `Keep Highest Priority LP` (order: MO2 position, PortalStrict for divergent same-worldspace, radius, fade, source_mod, source_file, entry_id)
 - `Choose Entries` (supports selecting multiple LP entries to keep)
 - `Disable LP`
 8. Click `Apply To Selected`.

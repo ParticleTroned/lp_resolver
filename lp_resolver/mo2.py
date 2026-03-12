@@ -68,12 +68,10 @@ def read_enabled_mods(profile_path: Path, mods_dir: Path) -> list[ModEntry]:
         if marker == "+" and mod_name:
             enabled_names.append(mod_name)
 
-    # MO2 modlist.txt ordering in this toolchain is high-priority first.
-    # We keep "larger priority wins" semantics across the resolver by mapping
-    # earlier lines to larger numeric priorities.
+    # MO2 semantics: entries further down the mod list override entries above.
+    # Keep "larger priority wins" by mapping later lines to larger numbers.
     entries: list[ModEntry] = []
-    max_priority = len(enabled_names) - 1
     for order_index, mod_name in enumerate(enabled_names):
-        priority = max_priority - order_index
+        priority = order_index
         entries.append(ModEntry(name=mod_name, priority=priority, path=mods_dir / mod_name))
     return entries
