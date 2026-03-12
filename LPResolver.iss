@@ -2,7 +2,7 @@
 ; Update SourceDir before compiling this script in Inno Setup.
 
 #define AppName "LP Conflict Resolver"
-#define AppVersion "0.1.2"
+#define AppVersion "0.1.3"
 #define Publisher "LP Conflict Resolver Project"
 #define ExeName "LPConflictResolver.exe"
 #define SourceDir "C:\\path\\to\\lp_resolver\\dist\\lp_resolver_app\\LPConflictResolver"

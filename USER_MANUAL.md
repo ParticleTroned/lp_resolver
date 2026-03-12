@@ -1,5 +1,5 @@
 # Placed Lights and Particle Lights Conflict Resolver  
-Version: 0.1.2
+Version: 0.1.3
 
 This guide is for first-time users. It explains what the tool changes, how MO2 load order affects results, and how to export a safe patch.
 
@@ -12,7 +12,7 @@ The resolver scans your active MO2 profile and finds lighting conflicts:
 - LP vs LP duplicates (same NIF targeted more than once)
 - LP vs PL overlaps (Light Placer + ENB Particle Lights on same NIF)
 
-Then it lets you choose which LP entry should stay and exports an override patch mod.
+Then it lets you choose which LP entries should stay (single or multiple) and exports an override patch mod.
 
 Important:
 
@@ -55,15 +55,21 @@ Why this matters:
 - Anchor preview (XY/XZ)
 - LP/PL entries
 - Type notes and divergence snapshot
-6. Choose decision in `Action`:
+6. Optional: right-click selected conflict row(s) to open contributing source folder(s) in Windows Explorer.
+7. Choose decision in `Action`:
 - `Ignore`
 - `Keep Highest Priority LP`
-- `Choose Entries`
+- `Choose Entries` (supports selecting multiple LP entries to keep)
 - `Disable LP`
-7. Click `Apply To Selected`.
-8. Repeat for conflicts you care about.
-9. Click `Export Patch`.
-10. Put patch mod low in MO2 left pane so it wins.
+8. Click `Apply To Selected`.
+9. Optional bulk helpers:
+- `Clear All Decisions`
+- `Disable All Overlaps`
+- `Keep Highest For Duplicates`
+10. Repeat for conflicts you care about.
+11. Click `Export Patch`.
+12. Put patch mod low in MO2 left pane so it wins.
+    Place it after `PGPatcher`.
 
 ---
 
@@ -82,6 +88,7 @@ Each row is one NIF conflict group:
 - `Types`: conflict category
 - `LP #` / `PL #`: number of involved entries
 - `Decision`: current selected action for that NIF
+- Right-click row(s): open contributing source folder(s) in Explorer
 
 ![Conflicts table](images/manual-conflicts-table.PNG)
 
@@ -89,6 +96,7 @@ Each row is one NIF conflict group:
 
 Use `Action` + `LP Entries` selection list, then apply decision.  
 Anchor preview visualizes approximate overlap and radius relation.
+Batch decision helper buttons are available for fast baseline cleanup.
 
 ![Details And Decisions panel](images/manual-details-panel.PNG)
 
@@ -187,6 +195,9 @@ Behavior:
 - Only changed source paths are written.
 - Old stale resolver overrides are removed on later exports.
 - Original mods remain untouched.
+- If `resolver_decisions.json` exists in Output Dir, it is auto-loaded after scan.
+- Stale decisions (no longer matching current conflicts) are skipped safely.
+- Using `Save Decisions` also stores the current path fields and patch mod name.
 
 ---
 

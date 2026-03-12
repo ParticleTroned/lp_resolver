@@ -6,7 +6,6 @@ from __future__ import annotations
 from html import escape
 import json
 import sys
-import traceback
 from math import dist, isfinite
 from pathlib import Path
 from typing import Any
@@ -19,8 +18,8 @@ from .nif_preview import load_mesh_preview_for_nif, load_nif_bounding_radius_for
 from .patch_writer import write_patch_mod
 
 try:
-    from PySide6.QtCore import QItemSelectionModel, QObject, QPointF, QSettings, Qt, QThread, Signal, Slot
-    from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QPen
+    from PySide6.QtCore import QItemSelectionModel, QObject, QPointF, QSettings, Qt, QThread, QUrl, Signal, Slot
+    from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPainterPath, QPen
     from PySide6.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -35,6 +34,7 @@ try:
         QListWidget,
         QListWidgetItem,
         QMainWindow,
+        QMenu,
         QMessageBox,
         QPushButton,
         QHeaderView,
@@ -970,13 +970,13 @@ class ScanWorker(QObject):
         try:
             result = run_scan(self.config, write_output_reports=True)
             self.finished.emit(self.scan_id, result)
-        except FileNotFoundError as exc:
-            error_text = str(exc)
-            if "modlist.txt" in error_text.lower():
-                error_text = "MO2 Profile Path must point to a profile folder that contains modlist.txt."
-            self.failed.emit(self.scan_id, error_text)
-        except Exception:  # noqa: BLE001
-            self.failed.emit(self.scan_id, traceback.format_exc())
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc).strip()
+            if not message:
+                message = type(exc).__name__
+            elif not message.lower().startswith(type(exc).__name__.lower()):
+                message = f"{type(exc).__name__}: {message}"
+            self.failed.emit(self.scan_id, message)
 
 
 class MainWindow(QMainWindow):
@@ -1149,6 +1149,95 @@ class MainWindow(QMainWindow):
         if not output_dir.is_dir():
             return "Path exists but is not a directory."
         return None
+
+    @staticmethod
+    def _error_detail_line(error_text: str) -> str:
+        lines = [line.strip() for line in str(error_text).splitlines() if line.strip()]
+        if not lines:
+            return "No additional details available."
+        for line in reversed(lines):
+            lowered = line.lower()
+            if lowered.startswith("traceback"):
+                continue
+            if line.startswith('File "'):
+                continue
+            return line
+        return lines[-1]
+
+    def _format_scan_error_message(self, error_text: str) -> str:
+        detail = self._error_detail_line(error_text)
+        lowered = detail.lower()
+
+        if "modlist.txt" in lowered:
+            return (
+                "MO2 Profile Path must point to a profile folder that contains modlist.txt.\n\n"
+                "How to fix:\n"
+                "1. Open MO2 once and select/start this profile so MO2 creates profile files.\n"
+                "2. Close MO2.\n"
+                "3. In LP Resolver, set Profile Path to MO2\\profiles\\<YourProfile> and scan again.\n\n"
+                f"Details: {detail}"
+            )
+
+        if "profile path does not exist" in lowered or "profile path is not a directory" in lowered:
+            return (
+                "The selected MO2 Profile Path is invalid.\n\n"
+                "How to fix:\n"
+                "1. Set Profile Path to an existing folder under MO2\\profiles.\n"
+                "2. Make sure the folder belongs to the profile you want to scan.\n"
+                "3. Scan again.\n\n"
+                f"Details: {detail}"
+            )
+
+        if "mods directory does not exist" in lowered or "could not resolve mods directory" in lowered:
+            return (
+                "The mods directory could not be resolved from your MO2 setup.\n\n"
+                "How to fix:\n"
+                "1. Set MO2 Root to your actual Mod Organizer 2 root folder.\n"
+                "2. Confirm that folder contains 'mods' and 'profiles'.\n"
+                "3. Start MO2 once, then close it and scan again.\n\n"
+                f"Details: {detail}"
+            )
+
+        if "permission" in lowered or "access is denied" in lowered:
+            return (
+                "The resolver does not have permission to read or write one of the required paths.\n\n"
+                "How to fix:\n"
+                "1. Close MO2 and Explorer windows that might lock files.\n"
+                "2. Choose an Output Dir you can write to.\n"
+                "3. Retry the scan.\n\n"
+                f"Details: {detail}"
+            )
+
+        return (
+            "Scan failed.\n\n"
+            "How to fix:\n"
+            "1. Verify MO2 Root and Profile Path are correct.\n"
+            "2. Open MO2 once with that profile, then close MO2.\n"
+            "3. Retry scan.\n\n"
+            f"Details: {detail}"
+        )
+
+    def _format_ui_error_message(self, context: str, error_text: str) -> str:
+        detail = self._error_detail_line(error_text)
+        return (
+            f"{context}\n\n"
+            "How to fix:\n"
+            "1. Try the action again.\n"
+            "2. If it repeats, restart LP Resolver.\n"
+            "3. If it still repeats, report it on GitHub with the detail below.\n\n"
+            f"Details: {detail}"
+        )
+
+    def _format_file_io_error_message(self, context: str, error_text: str) -> str:
+        detail = self._error_detail_line(error_text)
+        return (
+            f"{context}\n\n"
+            "How to fix:\n"
+            "1. Check that the selected file/folder exists.\n"
+            "2. Check that you have read/write permission.\n"
+            "3. Retry the action.\n\n"
+            f"Details: {detail}"
+        )
 
     def _build_controls_group(self) -> QWidget:
         group = QGroupBox("Scan And Output")
@@ -1342,6 +1431,8 @@ class MainWindow(QMainWindow):
         self.conflicts_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.conflicts_table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.conflicts_table.itemSelectionChanged.connect(self.on_conflict_selection_changed)
+        self.conflicts_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.conflicts_table.customContextMenuRequested.connect(self._show_conflicts_context_menu)
         self.conflicts_table.setSortingEnabled(True)
         self.conflicts_table.setAlternatingRowColors(True)
         self.conflicts_table.setWordWrap(False)
@@ -1353,7 +1444,8 @@ class MainWindow(QMainWindow):
             "- Types: detected conflict types (hover value for meaning/overhead)\n"
             "- LP JSON: contributing LightPlacer files\n"
             "- LP # / PL #: candidate counts\n"
-            "- Decision: current resolver action"
+            "- Decision: current resolver action\n"
+            "Right-click a row to open contributing source folder(s) in Explorer."
         )
 
         header = self.conflicts_table.horizontalHeader()
@@ -1566,7 +1658,10 @@ class MainWindow(QMainWindow):
         elif not config.profile_path.exists() or not config.profile_path.is_dir():
             errors.append(f"Profile Path does not exist or is not a folder: {config.profile_path}")
         elif not (config.profile_path / "modlist.txt").exists():
-            errors.append("MO2 Profile Path must point to a profile folder that contains modlist.txt.")
+            errors.append(
+                "MO2 Profile Path must point to a profile folder that contains modlist.txt.\n"
+                "Tip: open MO2 once with this profile to generate modlist.txt, then scan again."
+            )
 
         if not output_dir_text:
             errors.append("Output Dir is required.")
@@ -1657,9 +1752,16 @@ class MainWindow(QMainWindow):
                     self.summary_label.text()
                     + f" | Overridden skipped LP/PL: {result.lp_overridden_files}/{result.pl_overridden_files}"
                 )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             self.summary_label.setText("Scan finished, but UI update failed.")
-            QMessageBox.critical(self, "UI Error", traceback.format_exc())
+            QMessageBox.critical(
+                self,
+                "UI Error",
+                self._format_ui_error_message(
+                    "Scan finished, but the results view could not be refreshed.",
+                    str(exc),
+                ),
+            )
 
     @Slot(int, str)
     def on_scan_failed(self, scan_id: int, error_text: str) -> None:
@@ -1673,7 +1775,7 @@ class MainWindow(QMainWindow):
             self.anchor_summary_label.setText("Scan failed. No preview available.")
             self.mesh_status_label.setText("Mesh: not loaded")
             self.anchor_points_text.clear()
-            QMessageBox.critical(self, "Scan Failed", error_text)
+            QMessageBox.critical(self, "Scan Failed", self._format_scan_error_message(error_text))
         except Exception:  # noqa: BLE001
             self.summary_label.setText("Scan failed (UI update error).")
 
@@ -2041,6 +2143,107 @@ class MainWindow(QMainWindow):
                 selected_conflicts.append(conflict)
         return selected_conflicts
 
+    @Slot(object)
+    def _show_conflicts_context_menu(self, position) -> None:
+        if self._scan_in_progress or self._is_closing:
+            return
+
+        row = self.conflicts_table.rowAt(position.y())
+        if row < 0:
+            return
+
+        row_item = self.conflicts_table.item(row, 0)
+        if row_item is not None and not row_item.isSelected():
+            self.conflicts_table.selectRow(row)
+
+        conflicts = self._selected_conflicts()
+        folders = self._conflict_source_folders(conflicts)
+        menu = QMenu(self)
+        if len(folders) <= 1:
+            label = "Open Source Folder In Explorer"
+        else:
+            label = f"Open {len(folders)} Source Folders In Explorer"
+        open_action = menu.addAction(label)
+        open_action.setEnabled(bool(folders))
+
+        chosen_action = menu.exec(self.conflicts_table.viewport().mapToGlobal(position))
+        if chosen_action == open_action:
+            self._open_conflict_source_folders(folders)
+
+    def _conflict_source_folders(self, conflicts: list[Conflict]) -> list[Path]:
+        if self.scan_result is None:
+            return []
+
+        mods_dir = self.scan_result.mods_dir
+        source_files: list[Path] = []
+        seen_sources: set[tuple[str, str]] = set()
+
+        for conflict in conflicts:
+            for entry in conflict.lp_entries:
+                key = (entry.source_mod, entry.source_file)
+                if key in seen_sources:
+                    continue
+                seen_sources.add(key)
+                source_files.append(mods_dir / entry.source_mod / Path(entry.source_file))
+            for target in conflict.pl_targets:
+                key = (target.source_mod, target.source_file)
+                if key in seen_sources:
+                    continue
+                seen_sources.add(key)
+                source_files.append(mods_dir / target.source_mod / Path(target.source_file))
+
+        folders: list[Path] = []
+        seen_folders: set[Path] = set()
+        for source_file in source_files:
+            folder = source_file.parent
+            if not folder.exists():
+                existing_parent = folder
+                while not existing_parent.exists() and existing_parent != existing_parent.parent:
+                    existing_parent = existing_parent.parent
+                if existing_parent.exists():
+                    folder = existing_parent
+            folder = folder.resolve()
+            if folder in seen_folders:
+                continue
+            seen_folders.add(folder)
+            folders.append(folder)
+
+        return folders
+
+    def _open_conflict_source_folders(self, folders: list[Path]) -> None:
+        if not folders:
+            QMessageBox.information(
+                self,
+                "Open Source Folder",
+                "No source folders were found for the selected conflict.",
+            )
+            return
+
+        if len(folders) > 8:
+            answer = QMessageBox.question(
+                self,
+                "Open Source Folders",
+                f"This will open {len(folders)} folders in Explorer. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+
+        failed: list[str] = []
+        for folder in folders:
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+                failed.append(str(folder))
+
+        if failed:
+            preview = "\n".join(failed[:6])
+            suffix = "" if len(failed) <= 6 else f"\n...and {len(failed) - 6} more."
+            QMessageBox.warning(
+                self,
+                "Open Source Folder",
+                f"Could not open these folders:\n{preview}{suffix}",
+            )
+
     def _selected_entry_ids(self) -> list[str]:
         selected_ids: list[str] = []
         seen: set[str] = set()
@@ -2146,9 +2349,16 @@ class MainWindow(QMainWindow):
             self.anchor_summary_label.setText(f"{lp_summary} {pl_summary} {projection_note}".strip())
             self.mesh_status_label.setText(f"Mesh: {mesh_status}")
             self.anchor_points_text.setPlainText(self._build_anchor_points_text(conflict, mesh_points, nif_radius_hint))
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             self.entry_list.blockSignals(False)
-            QMessageBox.critical(self, "UI Error", traceback.format_exc())
+            QMessageBox.critical(
+                self,
+                "UI Error",
+                self._format_ui_error_message(
+                    "The conflict details panel could not be updated for the selected row.",
+                    str(exc),
+                ),
+            )
 
     @staticmethod
     def _normalize_snapshot_value(value: Any) -> str:
@@ -2930,11 +3140,22 @@ class MainWindow(QMainWindow):
         decisions_path = self._default_decisions_path()
         if not decisions_path.exists():
             return
-        decisions = load_decisions(decisions_path)
-        applied, stale = apply_decisions(self.scan_result.conflicts, decisions)
-        self.decisions = applied
-        if stale:
-            self.summary_label.setText(self.summary_label.text() + f" | Stale decisions skipped: {len(stale)}")
+        try:
+            decisions = load_decisions(decisions_path)
+            applied, stale = apply_decisions(self.scan_result.conflicts, decisions)
+            self.decisions = applied
+            if stale:
+                self.summary_label.setText(self.summary_label.text() + f" | Stale decisions skipped: {len(stale)}")
+        except Exception as exc:  # noqa: BLE001
+            self.summary_label.setText(self.summary_label.text() + " | Default decisions load failed.")
+            QMessageBox.warning(
+                self,
+                "Load Decisions",
+                self._format_file_io_error_message(
+                    "Found resolver_decisions.json but could not load it. The scan results are still available.",
+                    str(exc),
+                ),
+            )
 
     def load_decisions_from_disk(self) -> None:
         if self.scan_result is None:
@@ -2950,14 +3171,24 @@ class MainWindow(QMainWindow):
         if not selected_path:
             return
 
-        decisions = load_decisions(Path(selected_path))
-        applied, stale = apply_decisions(self.scan_result.conflicts, decisions)
-        self.decisions = applied
-        self._populate_conflicts_table()
-        message = f"Loaded decisions: {len(applied)}"
-        if stale:
-            message += f" | Stale skipped: {len(stale)}"
-        QMessageBox.information(self, "Load Decisions", message)
+        try:
+            decisions = load_decisions(Path(selected_path))
+            applied, stale = apply_decisions(self.scan_result.conflicts, decisions)
+            self.decisions = applied
+            self._populate_conflicts_table()
+            message = f"Loaded decisions: {len(applied)}"
+            if stale:
+                message += f" | Stale skipped: {len(stale)}"
+            QMessageBox.information(self, "Load Decisions", message)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self,
+                "Load Decisions",
+                self._format_file_io_error_message(
+                    "Could not load the selected decisions file.",
+                    str(exc),
+                ),
+            )
 
     def save_decisions_to_disk(self) -> None:
         default_path = str(self._default_decisions_path())
@@ -2969,24 +3200,45 @@ class MainWindow(QMainWindow):
         )
         if not selected_path:
             return
-        save_decisions(Path(selected_path), self.decisions)
-        QMessageBox.information(self, "Save Decisions", f"Saved {len(self.decisions)} decisions.")
+        try:
+            save_decisions(Path(selected_path), self.decisions)
+            self._save_persistent_paths()
+            QMessageBox.information(self, "Save Decisions", f"Saved {len(self.decisions)} decisions.")
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(
+                self,
+                "Save Decisions",
+                self._format_file_io_error_message(
+                    "Could not save decisions to the selected file.",
+                    str(exc),
+                ),
+            )
 
     def export_patch_mod(self) -> None:
         if self.scan_result is None:
             QMessageBox.warning(self, "Export Patch", "Run scan first.")
             return
         patch_name = self.patch_name_edit.text().strip() or "LP_ConflictPatch"
-        result = write_patch_mod(self.scan_result, self.decisions, patch_mod_name=patch_name)
-        message = (
-            f"Patch written to:\n{result.patch_mod_dir}\n\n"
-            f"Selected NIF decisions: {result.selected_nif_count}\n"
-            f"Overridden source JSON files: {len(result.override_files)}\n"
-            f"Exported LP entries: {result.selected_entry_count}\n"
-            f"Stale overrides removed: {result.stale_removed_count}\n"
-            f"Warnings: {len(result.warnings)}"
-        )
-        QMessageBox.information(self, "Export Patch", message)
+        try:
+            result = write_patch_mod(self.scan_result, self.decisions, patch_mod_name=patch_name)
+            message = (
+                f"Patch written to:\n{result.patch_mod_dir}\n\n"
+                f"Selected NIF decisions: {result.selected_nif_count}\n"
+                f"Overridden source JSON files: {len(result.override_files)}\n"
+                f"Exported LP entries: {result.selected_entry_count}\n"
+                f"Stale overrides removed: {result.stale_removed_count}\n"
+                f"Warnings: {len(result.warnings)}"
+            )
+            QMessageBox.information(self, "Export Patch", message)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Export Patch",
+                self._format_file_io_error_message(
+                    "Patch export failed.",
+                    str(exc),
+                ),
+            )
 
 
 def main() -> int:
