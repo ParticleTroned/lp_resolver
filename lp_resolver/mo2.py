@@ -52,7 +52,10 @@ def resolve_mods_dir(mo2_root: Path, explicit_mods_dir: Path | None = None) -> P
     return default_mods_dir
 
 
-def read_enabled_mods(profile_path: Path, mods_dir: Path) -> list[ModEntry]:
+def read_enabled_mods(
+    profile_path: Path,
+    mods_dir: Path,
+) -> list[ModEntry]:
     modlist_path = profile_path / "modlist.txt"
     if not modlist_path.exists():
         raise FileNotFoundError(f"modlist.txt not found: {modlist_path}")
@@ -68,10 +71,11 @@ def read_enabled_mods(profile_path: Path, mods_dir: Path) -> list[ModEntry]:
         if marker == "+" and mod_name:
             enabled_names.append(mod_name)
 
-    # MO2 semantics: entries further down the mod list override entries above.
-    # Keep "larger priority wins" by mapping later lines to larger numbers.
+    # MO2 semantics in this resolver: top entries in modlist.txt are highest priority.
+    # Internally we keep "larger priority wins" for all downstream tie-break logic.
     entries: list[ModEntry] = []
+    enabled_count = len(enabled_names)
     for order_index, mod_name in enumerate(enabled_names):
-        priority = order_index
+        priority = enabled_count - order_index - 1
         entries.append(ModEntry(name=mod_name, priority=priority, path=mods_dir / mod_name))
     return entries
