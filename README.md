@@ -1,6 +1,6 @@
 # LP Conflict Resolver
 
-Standalone desktop and CLI tool for Mod Organizer 2 (MO2) that scans Light Placer (LP) and Particle Lights (PL) data, highlights likely lighting conflicts, and exports a patch mod.
+Standalone desktop and CLI tool for Mod Organizer 2 (MO2) and Vortex that scans Light Placer (LP) and Particle Lights (PL) data, highlights likely lighting conflicts, and exports a patch mod.
 
 ## License
 
@@ -24,7 +24,7 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## Why It Is Useful
 
-- Reduces manual LP/PL conflict triage in large MO2 modlists.
+- Reduces manual LP/PL conflict triage in large MO2/Vortex modlists.
 - Makes conflict decisions repeatable by saving/loading resolver decisions.
 - Exports deterministic override JSONs that fit normal MO2 last-wins behavior.
 - Supports both GUI and CLI workflows for end users and maintainers.
@@ -43,7 +43,8 @@ See the detailed install/build/run steps in the sections below.
 
 - Windows (for packaged EXE workflow)
 - Python 3.10+
-- Mod Organizer 2 setup with `mods/` and `profiles/`
+- Mod Organizer 2 setup with `mods/` and `profiles/`, or
+- Vortex profile + staging mods directory
 
 ## Install From Source
 
@@ -87,6 +88,18 @@ python -m lp_resolver `
   --pl-source nif `
   --verbose
 ```
+
+CLI Vortex profile example:
+
+```powershell
+python -m lp_resolver `
+  --profile-path "C:\Users\<User>\AppData\Roaming\Vortex\skyrimse\profiles\<ProfileId>" `
+  --output-dir "dist\lp_resolver" `
+  --pl-source nif `
+  --verbose
+```
+
+For Vortex scans, LP Resolver writes a synthetic `vortex_modlist.txt` (top entry wins) and uses it as the canonical loose-file priority list.
 
 Version:
 

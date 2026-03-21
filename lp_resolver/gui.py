@@ -183,17 +183,33 @@ def _as_xyz(value: Any) -> tuple[float, float, float] | None:
         return None
 
 
+def _as_xyz_mapping(value: Any) -> tuple[float, float, float] | None:
+    if not isinstance(value, dict):
+        return None
+    x = value.get("x", value.get("X"))
+    y = value.get("y", value.get("Y"))
+    z = value.get("z", value.get("Z"))
+    if x is None or y is None or z is None:
+        return None
+    try:
+        return (float(x), float(y), float(z))
+    except (TypeError, ValueError):
+        return None
+
+
 def _extract_points_from_value(value: Any) -> list[tuple[float, float, float]]:
     points: list[tuple[float, float, float]] = []
+    mapping_point = _as_xyz_mapping(value)
+    if mapping_point is not None:
+        points.append(mapping_point)
+        return points
     if isinstance(value, list):
         single = _as_xyz(value)
         if single is not None:
             points.append(single)
         else:
             for item in value:
-                point = _as_xyz(item)
-                if point is not None:
-                    points.append(point)
+                points.extend(_extract_points_from_value(item))
     return points
 
 
@@ -209,6 +225,10 @@ def _iter_lights_lists(value: Any):
             yield from _iter_lights_lists(child)
 
 
+_LP_POINT_KEY_HINTS = ("point", "points", "offset", "position", "pos", "anchor", "location", "coord")
+_LP_NODE_KEY_HINTS = ("node", "nodes")
+
+
 def _extract_lp_anchor_points(settings: dict[str, Any]) -> list[tuple[float, float, float]]:
     points: list[tuple[float, float, float]] = []
     for lights in _iter_lights_lists(settings):
@@ -220,21 +240,61 @@ def _extract_lp_anchor_points(settings: dict[str, Any]) -> list[tuple[float, flo
             data = light.get("data")
             if isinstance(data, dict):
                 points.extend(_extract_points_from_value(data.get("offset")))
-    return points
+
+    # Fallback for non-standard LP schemas where anchors are not under lights[].
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                key_l = str(key).lower()
+                if any(hint in key_l for hint in _LP_POINT_KEY_HINTS):
+                    points.extend(_extract_points_from_value(child))
+                _walk(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                _walk(child)
+
+    _walk(settings)
+    return _dedupe_points(_sanitize_points(points))
 
 
 def _extract_lp_anchor_nodes(settings: dict[str, Any]) -> set[str]:
     nodes: set[str] = set()
+
+    def _add_nodes(raw_nodes: Any) -> None:
+        if isinstance(raw_nodes, str):
+            text = raw_nodes.strip().lower()
+            if text:
+                nodes.add(text)
+            return
+        if isinstance(raw_nodes, list):
+            for node in raw_nodes:
+                if isinstance(node, str):
+                    text = node.strip().lower()
+                    if text:
+                        nodes.add(text)
+
     for lights in _iter_lights_lists(settings):
         for light in lights:
             if not isinstance(light, dict):
                 continue
-            raw_nodes = light.get("nodes")
-            if not isinstance(raw_nodes, list):
-                continue
-            for node in raw_nodes:
-                if isinstance(node, str) and node.strip():
-                    nodes.add(node.strip().lower())
+            _add_nodes(light.get("nodes"))
+            _add_nodes(light.get("node"))
+
+    # Fallback for non-standard LP schemas where nodes are outside lights[].
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                key_l = str(key).lower()
+                if any(hint in key_l for hint in _LP_NODE_KEY_HINTS):
+                    _add_nodes(child)
+                _walk(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                _walk(child)
+
+    _walk(settings)
     return nodes
 
 
@@ -253,28 +313,73 @@ def _to_positive_float(value: Any) -> float | None:
 def _estimate_entry_radius_units(settings: dict[str, Any]) -> float | None:
     """
     Best-effort LP light radius estimate in mesh units.
-    - Prefers explicit `data.radius`
-    - Falls back to inverse-square style `data.size`
+    - Prefers explicit `radius` keys
+    - Falls back to inverse-square style `size`
     """
     radii: list[float] = []
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                key_l = str(key).lower()
+                if key_l == "radius":
+                    radius = _to_positive_float(child)
+                    if radius is not None:
+                        radii.append(radius)
+                elif key_l == "size":
+                    size = _to_positive_float(child)
+                    if size is not None:
+                        # Convert ISL "size" to an approximate radius scale for preview purposes.
+                        radii.append(size * 12.0)
+                _walk(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                _walk(child)
+
+    _walk(settings)
+    if not radii:
+        return None
+    return sum(radii) / len(radii)
+
+
+def _compact_value_text(value: Any, max_len: int = 80) -> str:
+    if value is None:
+        return "(none)"
+    if isinstance(value, (dict, list, tuple)):
+        text = json.dumps(value, ensure_ascii=True, sort_keys=True)
+    else:
+        text = str(value)
+    if len(text) <= max_len:
+        return text
+    return f"{text[: max_len - 3]}..."
+
+
+def _extract_lp_light_value_summaries(settings: dict[str, Any]) -> list[str]:
+    summaries: list[str] = []
+    seen: set[str] = set()
+    preferred_keys = ("light", "fade", "cutoff", "size", "radius", "flags", "color")
+
     for lights in _iter_lights_lists(settings):
         for light in lights:
             if not isinstance(light, dict):
                 continue
             data = light.get("data")
-            if not isinstance(data, dict):
+            data_map = data if isinstance(data, dict) else {}
+            parts: list[str] = []
+            for key in preferred_keys:
+                raw_value = data_map.get(key, light.get(key))
+                if raw_value is None:
+                    continue
+                parts.append(f"{key}={_compact_value_text(raw_value)}")
+            if not parts:
                 continue
-            radius = _to_positive_float(data.get("radius"))
-            if radius is not None:
-                radii.append(radius)
+            summary = ", ".join(parts)
+            if summary in seen:
                 continue
-            size = _to_positive_float(data.get("size"))
-            if size is not None:
-                # Convert ISL "size" to an approximate radius scale for preview purposes.
-                radii.append(size * 12.0)
-    if not radii:
-        return None
-    return sum(radii) / len(radii)
+            seen.add(summary)
+            summaries.append(summary)
+    return summaries
 
 
 _PL_POINT_KEY_HINTS = ("point", "points", "offset", "position", "pos", "anchor", "location", "coord")
@@ -1171,19 +1276,21 @@ class MainWindow(QMainWindow):
 
         if "modlist.txt" in lowered:
             return (
-                "MO2 Profile Path must point to a profile folder that contains modlist.txt.\n\n"
+                "Profile Path must point to either:\n"
+                "- an MO2 profile folder containing modlist.txt, or\n"
+                "- a Vortex profile folder containing plugins.txt/loadorder.txt.\n\n"
                 "How to fix:\n"
-                "1. Open MO2 once and select/start this profile so MO2 creates profile files.\n"
-                "2. Close MO2.\n"
-                "3. In LP Resolver, set Profile Path to MO2\\profiles\\<YourProfile> and scan again.\n\n"
+                "1. For MO2: open MO2 once with this profile so modlist.txt exists.\n"
+                "2. For Vortex: use the profile folder under Vortex\\<game>\\profiles\\<ProfileId>.\n"
+                "3. Scan again.\n\n"
                 f"Details: {detail}"
             )
 
         if "profile path does not exist" in lowered or "profile path is not a directory" in lowered:
             return (
-                "The selected MO2 Profile Path is invalid.\n\n"
+                "The selected Profile Path is invalid.\n\n"
                 "How to fix:\n"
-                "1. Set Profile Path to an existing folder under MO2\\profiles.\n"
+                "1. Set Profile Path to an existing MO2 or Vortex profile folder.\n"
                 "2. Make sure the folder belongs to the profile you want to scan.\n"
                 "3. Scan again.\n\n"
                 f"Details: {detail}"
@@ -1191,11 +1298,11 @@ class MainWindow(QMainWindow):
 
         if "mods directory does not exist" in lowered or "could not resolve mods directory" in lowered:
             return (
-                "The mods directory could not be resolved from your MO2 setup.\n\n"
+                "The mods directory could not be resolved from your setup.\n\n"
                 "How to fix:\n"
-                "1. Set MO2 Root to your actual Mod Organizer 2 root folder.\n"
-                "2. Confirm that folder contains 'mods' and 'profiles'.\n"
-                "3. Start MO2 once, then close it and scan again.\n\n"
+                "1. MO2: set MO2 Root to your Mod Organizer 2 folder.\n"
+                "2. Vortex: set MO2 Root to your Vortex staging mods folder (or ensure Vortex state has installPath).\n"
+                "3. Retry scan.\n\n"
                 f"Details: {detail}"
             )
 
@@ -1212,8 +1319,8 @@ class MainWindow(QMainWindow):
         return (
             "Scan failed.\n\n"
             "How to fix:\n"
-            "1. Verify MO2 Root and Profile Path are correct.\n"
-            "2. Open MO2 once with that profile, then close MO2.\n"
+            "1. Verify path inputs are correct.\n"
+            "2. Ensure the selected profile folder matches MO2 or Vortex format.\n"
             "3. Retry scan.\n\n"
             f"Details: {detail}"
         )
@@ -1244,21 +1351,23 @@ class MainWindow(QMainWindow):
         group = QGroupBox("Scan And Output")
         group.setToolTip(
             "Configure scan inputs and export output.\n"
-            "Paths should point to your MO2 setup and desired report location."
+            "Paths should point to your MO2 or Vortex setup and desired report location."
         )
         grid = QGridLayout(group)
 
         self.mo2_root_edit = QLineEdit("")
-        self.mo2_root_edit.setPlaceholderText("C:\\Path\\To\\MO2")
+        self.mo2_root_edit.setPlaceholderText("C:\\Path\\To\\MO2  (or E:\\modding\\vortex)")
         self.mo2_root_edit.setToolTip(
-            "MO2 root folder containing 'mods/' and 'profiles/'.\n"
-            "Example: C:\\Path\\To\\MO2"
+            "For MO2: root folder containing 'mods/' and 'profiles/'.\n"
+            "For Vortex: staging mods folder (for example E:\\modding\\vortex).\n"
+            "Example MO2: C:\\Path\\To\\MO2"
         )
         self.profile_path_edit = QLineEdit("")
-        self.profile_path_edit.setPlaceholderText("C:\\Path\\To\\MO2\\profiles\\YourProfile")
+        self.profile_path_edit.setPlaceholderText("MO2\\profiles\\<Profile>  or  Vortex\\<game>\\profiles\\<id>")
         self.profile_path_edit.setToolTip(
-            "Exact MO2 profile folder to scan.\n"
-            "Example: C:\\Path\\To\\MO2\\profiles\\YourProfile"
+            "Exact profile folder to scan.\n"
+            "MO2 example: C:\\Path\\To\\MO2\\profiles\\YourProfile\n"
+            "Vortex example: C:\\Users\\<user>\\AppData\\Roaming\\Vortex\\skyrimse\\profiles\\<ProfileId>"
         )
         self.output_dir_edit = QLineEdit("output")
         self.output_dir_edit.setToolTip(
@@ -1331,7 +1440,7 @@ class MainWindow(QMainWindow):
         browse_mo2_btn = QPushButton("Browse")
         browse_profile_btn = QPushButton("Browse")
         browse_output_btn = QPushButton("Browse")
-        browse_mo2_btn.setToolTip("Browse to MO2 root folder.")
+        browse_mo2_btn.setToolTip("Browse to MO2 root folder or Vortex staging mods folder.")
         browse_profile_btn.setToolTip("Browse to profile path folder.")
         browse_output_btn.setToolTip("Browse to report output folder.")
         browse_mo2_btn.clicked.connect(lambda: self._browse_directory(self.mo2_root_edit))
@@ -1383,7 +1492,7 @@ class MainWindow(QMainWindow):
             "worldspace-split variants, or hand-tuned multi-light compositions."
         )
 
-        grid.addWidget(QLabel("MO2 Root"), 0, 0)
+        grid.addWidget(QLabel("MO2 Root/Vortex mod staging folder"), 0, 0)
         grid.addWidget(self.mo2_root_edit, 0, 1)
         grid.addWidget(browse_mo2_btn, 0, 2)
         grid.addWidget(QLabel("Profile Path"), 1, 0)
@@ -1658,22 +1767,28 @@ class MainWindow(QMainWindow):
         mo2_root_text = self.mo2_root_edit.text().strip()
         profile_path_text = self.profile_path_edit.text().strip()
         output_dir_text = self.output_dir_edit.text().strip()
+        profile_dir = config.profile_path
+        profile_is_vortex = profile_dir.exists() and profile_dir.is_dir() and (
+            (profile_dir / "plugins.txt").exists() or (profile_dir / "loadorder.txt").exists()
+        )
 
-        if not mo2_root_text:
-            errors.append("MO2 Root is required.")
-        elif not config.mo2_root.exists() or not config.mo2_root.is_dir():
-            errors.append(f"MO2 Root does not exist or is not a folder: {config.mo2_root}")
-        elif not (config.mo2_root / "mods").exists():
-            errors.append(f"MO2 Root is missing 'mods' folder: {config.mo2_root}")
+        if not mo2_root_text and not profile_is_vortex:
+            errors.append("MO2 Root/Vortex mod staging folder is required for MO2 profiles.")
+        elif mo2_root_text and (not config.mo2_root.exists() or not config.mo2_root.is_dir()):
+            errors.append(f"MO2 Root/Vortex mod staging folder does not exist or is not a folder: {config.mo2_root}")
 
         if not profile_path_text:
             errors.append("Profile Path is required.")
         elif not config.profile_path.exists() or not config.profile_path.is_dir():
             errors.append(f"Profile Path does not exist or is not a folder: {config.profile_path}")
-        elif not (config.profile_path / "modlist.txt").exists():
+        elif not (
+            (config.profile_path / "modlist.txt").exists()
+            or (config.profile_path / "plugins.txt").exists()
+            or (config.profile_path / "loadorder.txt").exists()
+        ):
             errors.append(
-                "MO2 Profile Path must point to a profile folder that contains modlist.txt.\n"
-                "Tip: open MO2 once with this profile to generate modlist.txt, then scan again."
+                "Profile Path must contain modlist.txt (MO2) or plugins.txt/loadorder.txt (Vortex).\n"
+                "Tip: for MO2 open the profile once so modlist.txt is generated."
             )
 
         if not output_dir_text:
@@ -1760,11 +1875,14 @@ class MainWindow(QMainWindow):
                     len(result.conflicts),
                 )
             )
+            self.summary_label.setText(self.summary_label.text() + f" | Order source: {result.mod_order_source}")
             if not result.config.include_overridden_files:
                 self.summary_label.setText(
                     self.summary_label.text()
                     + f" | Overridden skipped LP/PL: {result.lp_overridden_files}/{result.pl_overridden_files}"
                 )
+            if result.synthetic_modlist_path is not None:
+                self.summary_label.setText(self.summary_label.text() + f" | Synthetic list: {result.synthetic_modlist_path}")
         except Exception as exc:  # noqa: BLE001
             self.summary_label.setText("Scan finished, but UI update failed.")
             QMessageBox.critical(
@@ -2871,6 +2989,14 @@ class MainWindow(QMainWindow):
                 )
             return "Likely refinement split: node anchors are disjoint and no numeric point/offset data was found."
 
+        point_entries = sum(1 for item in series if item.get("points"))
+        node_entries = sum(1 for item in series if item.get("nodes"))
+        if point_entries > 0 and node_entries > 0:
+            return (
+                "Mixed LP anchor styles detected (point-based and node-based entries). "
+                "Direct geometric overlap confidence is limited."
+            )
+
         return "No comparable point or node anchors found in LP payloads."
 
     def _build_pl_localization_summary(
@@ -2939,6 +3065,7 @@ class MainWindow(QMainWindow):
             points = _extract_lp_anchor_points(entry.settings)
             nodes = sorted(_extract_lp_anchor_nodes(entry.settings))
             radius_units = _estimate_entry_radius_units(entry.settings)
+            light_value_summaries = _extract_lp_light_value_summaries(entry.settings)
             label = f"{idx}. {self._short_name(entry.source_file)} [{entry.entry_id[:8]}]"
             lines.append(label)
             if radius_units is not None:
@@ -2960,6 +3087,15 @@ class MainWindow(QMainWindow):
                 lines.append(f"   nodes: {formatted_nodes}")
             else:
                 lines.append("   nodes: (none)")
+
+            if light_value_summaries:
+                lines.append(f"   values: {light_value_summaries[0]}")
+                if len(light_value_summaries) > 1:
+                    lines.append(f"   values+: {light_value_summaries[1]}")
+                    if len(light_value_summaries) > 2:
+                        lines.append(f"   values_more: +{len(light_value_summaries) - 2}")
+            else:
+                lines.append("   values: (none)")
 
         lines.extend(self._build_divergence_snapshot_lines(conflict))
 

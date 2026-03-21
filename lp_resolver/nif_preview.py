@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .mo2 import read_enabled_mods
+from .vortex import export_vortex_enabled_mods, is_vortex_profile
 
 
 @dataclass(frozen=True)
@@ -1014,7 +1015,19 @@ def _load_mesh_preview_exact(mods_dir: str, profile_path: str, nif_path_canonica
 
 @lru_cache(maxsize=6)
 def _enabled_mods(profile_path: str, mods_dir: str):
-    return tuple(read_enabled_mods(Path(profile_path), Path(mods_dir)))
+    resolved_profile = Path(profile_path)
+    resolved_mods_dir = Path(mods_dir)
+    if (resolved_profile / "modlist.txt").exists():
+        return tuple(read_enabled_mods(resolved_profile, resolved_mods_dir))
+    if is_vortex_profile(resolved_profile):
+        vortex_result = export_vortex_enabled_mods(
+            profile_path=resolved_profile,
+            explicit_mods_dir=resolved_mods_dir,
+            export_path=resolved_profile / "vortex_modlist.txt",
+            write_export_file=False,
+        )
+        return tuple(vortex_result.entries)
+    return tuple(read_enabled_mods(resolved_profile, resolved_mods_dir))
 
 
 @lru_cache(maxsize=512)

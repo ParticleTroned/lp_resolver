@@ -1,13 +1,13 @@
 # Placed Lights and Particle Lights Conflict Resolver  
 Version: 0.1.4
 
-This guide is for first-time users. It explains what the tool changes, how MO2 load order affects results, and how to export a safe patch.
+This guide is for first-time users. It explains what the tool changes, how mod load order affects results (MO2 or Vortex), and how to export a safe patch.
 
 ---
 
 ## 1. What This Tool Does
 
-The resolver scans your active MO2 profile and finds lighting conflicts:
+The resolver scans your active MO2 or Vortex profile and finds lighting conflicts:
 
 - LP vs LP duplicates (same NIF targeted more than once)
 - LP vs PL overlaps (Light Placer + ENB Particle Lights on same NIF)

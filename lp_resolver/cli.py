@@ -12,9 +12,19 @@ from .engine import ScanConfig, run_scan
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Scan MO2 mods for Light Placer and Particle Light conflicts.")
+    parser = argparse.ArgumentParser(
+        description="Scan MO2 or Vortex mod setups for Light Placer and Particle Light conflicts."
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--mo2-root", required=True, type=Path, help="Path to MO2 root (contains mods/, profiles/).")
+    parser.add_argument(
+        "--mo2-root",
+        type=Path,
+        default=Path("."),
+        help=(
+            "Path to MO2 root (contains mods/, profiles/) for MO2 profiles. "
+            "For Vortex profile scans this can be omitted."
+        ),
+    )
     parser.add_argument("--profile", type=str, help="MO2 profile name (under profiles/).")
     parser.add_argument("--profile-path", type=Path, help="Explicit profile directory path.")
     parser.add_argument("--mods-dir", type=Path, help="Explicit mods directory path override.")
@@ -119,6 +129,15 @@ def run(args: argparse.Namespace) -> int:
     scan_result = run_scan(_config_from_args(args), write_output_reports=True)
 
     print(f"Enabled mods: {scan_result.enabled_mod_count}")
+    print(f"Mod order source: {scan_result.mod_order_source}")
+    if scan_result.synthetic_modlist_path is not None:
+        print(f"Synthetic modlist: {scan_result.synthetic_modlist_path}")
+    if scan_result.vortex_state_path is not None:
+        print(f"Vortex state source: {scan_result.vortex_state_path}")
+        for issue in scan_result.issues:
+            if issue.source_mod == "__vortex__" and issue.severity == "info" and issue.message.startswith("Tie-breakers"):
+                print(issue.message)
+                break
     print(f"LP candidate files: {scan_result.lp_candidate_files}")
     print(f"PL source mode: {scan_result.config.pl_source}")
     print(f"PL candidate files: {scan_result.pl_candidate_files}")

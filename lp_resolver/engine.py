@@ -13,6 +13,7 @@ from .models import Conflict, LightPlacerEntry, ParseIssue, ParticleLightTarget
 from .parsers import parse_light_placer_files, parse_particle_light_files
 from .pl_nif_scan import DEFAULT_PL_NIF_GLOBS, DEFAULT_PL_NIF_MOD_PATTERNS, discover_particle_light_nif_targets
 from .reporting import build_report_payload, write_reports
+from .vortex import VORTEX_EXPORT_FILENAME, export_vortex_enabled_mods, is_vortex_profile
 
 
 @dataclass
@@ -42,6 +43,9 @@ class ScanResult:
     mo2_root: Path
     profile_path: Path
     mods_dir: Path
+    mod_order_source: str
+    synthetic_modlist_path: Path | None
+    vortex_state_path: Path | None
     enabled_mod_count: int
     lp_candidate_files: int
     pl_candidate_files: int
@@ -72,8 +76,31 @@ def run_scan(config: ScanConfig, write_output_reports: bool = True) -> ScanResul
 
     mo2_root = config.mo2_root.expanduser().resolve()
     profile_path = resolve_profile_path(mo2_root, config.profile, config.profile_path)
-    mods_dir = resolve_mods_dir(mo2_root, config.mods_dir)
-    enabled_mods = read_enabled_mods(profile_path, mods_dir)
+    source_issues: list[ParseIssue] = []
+    synthetic_modlist_path: Path | None = None
+    vortex_state_path: Path | None = None
+
+    if (profile_path / "modlist.txt").exists():
+        mods_dir = resolve_mods_dir(mo2_root, config.mods_dir)
+        enabled_mods = read_enabled_mods(profile_path, mods_dir)
+        mod_order_source = "mo2"
+    elif is_vortex_profile(profile_path):
+        export_path = config.output_dir.expanduser().resolve() / VORTEX_EXPORT_FILENAME
+        vortex_result = export_vortex_enabled_mods(
+            profile_path=profile_path,
+            explicit_mods_dir=config.mods_dir,
+            export_path=export_path,
+        )
+        mods_dir = vortex_result.mods_dir
+        enabled_mods = vortex_result.entries
+        source_issues = vortex_result.issues
+        synthetic_modlist_path = vortex_result.export_path
+        vortex_state_path = vortex_result.state_path
+        mod_order_source = "vortex"
+    else:
+        raise FileNotFoundError(
+            f"Profile path must contain modlist.txt (MO2) or plugins.txt/loadorder.txt (Vortex): {profile_path}"
+        )
 
     lp_patterns = config.lp_globs or DEFAULT_LP_GLOBS
     pl_patterns = config.pl_globs or DEFAULT_PL_GLOBS
@@ -123,7 +150,7 @@ def run_scan(config: ScanConfig, write_output_reports: bool = True) -> ScanResul
             key=lambda item: (item.source_priority, item.source_mod.lower(), item.source_file.lower()),
         )
 
-    all_issues = [*lp_issues, *pl_issues]
+    all_issues = [*source_issues, *lp_issues, *pl_issues]
     pl_candidate_total = pl_json_candidate_count + pl_nif_candidate_count
 
     detected_conflicts = detect_conflicts(lp_entries, pl_targets)
@@ -140,6 +167,9 @@ def run_scan(config: ScanConfig, write_output_reports: bool = True) -> ScanResul
         mo2_root=mo2_root,
         profile_path=profile_path,
         mods_dir=mods_dir,
+        mod_order_source=mod_order_source,
+        synthetic_modlist_path=synthetic_modlist_path,
+        vortex_state_path=vortex_state_path,
         enabled_mod_count=len(enabled_mods),
         lp_candidate_files=len(lp_candidates),
         pl_candidate_files=pl_candidate_total,
@@ -161,6 +191,9 @@ def run_scan(config: ScanConfig, write_output_reports: bool = True) -> ScanResul
         mo2_root=mo2_root,
         profile_path=profile_path,
         mods_dir=mods_dir,
+        mod_order_source=mod_order_source,
+        synthetic_modlist_path=synthetic_modlist_path,
+        vortex_state_path=vortex_state_path,
         enabled_mod_count=len(enabled_mods),
         lp_candidate_files=len(lp_candidates),
         pl_candidate_files=pl_candidate_total,

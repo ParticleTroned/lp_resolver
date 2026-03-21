@@ -25,12 +25,18 @@ def build_report_payload(
     pl_targets: int,
     conflicts: list[Conflict],
     issues: list[ParseIssue],
+    mod_order_source: str = "mo2",
+    synthetic_modlist_path: Path | None = None,
+    vortex_state_path: Path | None = None,
 ) -> dict[str, Any]:
     return {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "mo2_root": str(mo2_root),
         "profile_path": str(profile_path),
         "mods_dir": str(mods_dir),
+        "mod_order_source": mod_order_source,
+        "synthetic_modlist_path": str(synthetic_modlist_path) if synthetic_modlist_path else None,
+        "vortex_state_path": str(vortex_state_path) if vortex_state_path else None,
         "summary": {
             "enabled_mod_count": enabled_mod_count,
             "lp_candidate_files": lp_candidate_files,
@@ -88,9 +94,10 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
         "# Light Placer Conflict Report",
         "",
         f"- Generated: {payload['generated_at_utc']}",
-        f"- MO2 Root: `{payload['mo2_root']}`",
+        f"- Mod Root: `{payload['mo2_root']}`",
         f"- Profile: `{payload['profile_path']}`",
         f"- Mods Dir: `{payload['mods_dir']}`",
+        f"- Mod Order Source: `{payload.get('mod_order_source', 'mo2')}`",
         "",
         "## Summary",
         f"- Enabled mods: {summary['enabled_mod_count']}",
@@ -102,6 +109,12 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
         f"- Normalized PL targets: {summary['pl_targets']}",
         f"- Conflicts: {summary['conflict_count']}",
     ]
+    synthetic_modlist_path = payload.get("synthetic_modlist_path")
+    if synthetic_modlist_path:
+        lines.append(f"- Synthetic Vortex modlist: `{synthetic_modlist_path}`")
+    vortex_state_path = payload.get("vortex_state_path")
+    if vortex_state_path:
+        lines.append(f"- Vortex state source: `{vortex_state_path}`")
 
     issues = payload.get("issues", [])
     if issues:
