@@ -32,6 +32,12 @@ class _BSAEntry:
     compressed: bool
 
 
+@dataclass(frozen=True)
+class _NIFLayout:
+    blocks: list[tuple[str, int, int]]
+    strings: list[str]
+
+
 class _ByteReader:
     def __init__(self, data: bytes) -> None:
         self.data = data
@@ -157,7 +163,7 @@ def _find_float3_runs(blob: bytes) -> list[list[tuple[float, float, float]]]:
     return candidates
 
 
-def _parse_nif_blocks(data: bytes) -> list[tuple[str, int, int]] | None:
+def _parse_nif_layout(data: bytes) -> _NIFLayout | None:
     if b"File Format" not in data[:128]:
         return None
 
@@ -222,11 +228,13 @@ def _parse_nif_blocks(data: bytes) -> list[tuple[str, int, int]] | None:
         _max_len = r.read_u32()
         if num_strings > 2_000_000:
             return None
+        strings: list[str] = []
         for _ in range(num_strings):
             s_len = r.read_u32()
             if s_len > 1_000_000:
                 return None
-            r.read_bytes(s_len)
+            raw = r.read_bytes(s_len)
+            strings.append(raw.decode("utf-8", errors="ignore").rstrip("\x00"))
 
         num_groups = r.read_u32()
         if num_groups > 100000:
@@ -250,9 +258,16 @@ def _parse_nif_blocks(data: bytes) -> list[tuple[str, int, int]] | None:
                 type_name = f"type_{type_idx}"
             blocks.append((type_name, cursor, size))
             cursor += size
-        return blocks
+        return _NIFLayout(blocks=blocks, strings=strings)
     except (ValueError, struct.error):
         return None
+
+
+def _parse_nif_blocks(data: bytes) -> list[tuple[str, int, int]] | None:
+    layout = _parse_nif_layout(data)
+    if layout is None:
+        return None
+    return layout.blocks
 
 
 def _extract_mesh_points_from_nif_bytes(data: bytes) -> tuple[list[tuple[float, float, float]], str]:
@@ -339,6 +354,118 @@ def _rotation_matrix_quality(values: tuple[float, ...]) -> float | None:
     norm_score = sum(1.0 / (1.0 + abs(n - 1.0)) for n in norms) / 3.0
     ortho_penalty = min(1.0, (d01 + d02 + d12) / 2.4)
     return norm_score + (1.0 - ortho_penalty)
+
+
+def _normalize_node_name(value: str) -> str:
+    return value.strip().lower()
+
+
+def _extract_transform_translation_at(blob: bytes, offset: int) -> tuple[tuple[float, float, float], float] | None:
+    if offset < 0 or offset + 56 > len(blob):
+        return None
+    try:
+        tx, ty, tz = struct.unpack_from("<fff", blob, offset)
+        rotation = struct.unpack_from("<fffffffff", blob, offset + 12)
+        scale = struct.unpack_from("<f", blob, offset + 48)[0]
+        collision_ref = struct.unpack_from("<i", blob, offset + 52)[0]
+    except struct.error:
+        return None
+
+    if not (math.isfinite(tx) and math.isfinite(ty) and math.isfinite(tz) and math.isfinite(scale)):
+        return None
+    if any(abs(v) > 500000.0 for v in (tx, ty, tz)):
+        return None
+    if scale <= 0.001 or scale > 100.0:
+        return None
+    if collision_ref < -1 or collision_ref > 1000000:
+        return None
+
+    rot_quality = _rotation_matrix_quality(rotation)
+    if rot_quality is None:
+        return None
+
+    score = rot_quality
+    if collision_ref == -1:
+        score += 0.10
+    score += 0.35 / (1.0 + abs(scale - 1.0))
+    score += 0.35 / (1.0 + (offset * 0.08))
+    return ((float(tx), float(ty), float(tz)), score)
+
+
+def _extract_named_block_translation(blob: bytes, extra_data_count: int | None) -> tuple[float, float, float] | None:
+    best: tuple[tuple[float, float, float], float] | None = None
+
+    candidate_offsets: list[int] = []
+    if extra_data_count is not None and 0 <= extra_data_count <= 2048:
+        controller_off = 8 + (extra_data_count * 4)
+        flags_off = controller_off + 4
+        base = flags_off + 2
+        aligned = ((base + 3) // 4) * 4
+        candidate_offsets.extend([base, aligned, flags_off + 4, flags_off + 8, flags_off + 12])
+
+    for off in candidate_offsets:
+        candidate = _extract_transform_translation_at(blob, off)
+        if candidate is None:
+            continue
+        if best is None or candidate[1] > best[1]:
+            best = candidate
+
+    # Conservative fallback scan near the start of the block for unknown subclass layouts.
+    scan_limit = max(0, min(len(blob) - 56, 224))
+    for off in range(0, scan_limit + 1, 4):
+        candidate = _extract_transform_translation_at(blob, off)
+        if candidate is None:
+            continue
+        if best is None or candidate[1] > best[1]:
+            best = candidate
+
+    if best is None:
+        return None
+    return best[0]
+
+
+def _extract_nif_node_positions_from_bytes(data: bytes) -> tuple[dict[str, tuple[float, float, float]], str]:
+    layout = _parse_nif_layout(data)
+    if layout is None:
+        return ({}, "header_parse_failed")
+    if not layout.strings:
+        return ({}, "no_string_table")
+
+    positions: dict[str, tuple[float, float, float]] = {}
+    considered_blocks = 0
+
+    for type_name, start, size in layout.blocks:
+        if "node" not in type_name.lower():
+            continue
+        if size < 24:
+            continue
+
+        blob = data[start : start + size]
+        considered_blocks += 1
+        try:
+            name_index = struct.unpack_from("<i", blob, 0)[0]
+            extra_data_count = struct.unpack_from("<I", blob, 4)[0]
+        except struct.error:
+            continue
+
+        if name_index < 0 or name_index >= len(layout.strings):
+            continue
+        node_name = _normalize_node_name(layout.strings[name_index])
+        if not node_name:
+            continue
+
+        if extra_data_count > 2048:
+            extra_data_count = None
+        translation = _extract_named_block_translation(blob, extra_data_count)
+        if translation is None:
+            continue
+
+        if node_name not in positions:
+            positions[node_name] = translation
+
+    if not positions:
+        return ({}, f"no_named_node_transforms_in_{considered_blocks}_node_blocks")
+    return (positions, f"named_node_transforms:{len(positions)}")
 
 
 def _extract_block_bounding_radius(blob: bytes) -> tuple[float, float] | None:
@@ -1110,3 +1237,39 @@ def load_nif_bounding_radius_for_nif(
                 return (radius, f"{detail}:{source_fallback};fallback:{fallback_rel}")
 
     return (None, "no_bounding_radius")
+
+
+@lru_cache(maxsize=1024)
+def _load_nif_node_positions_exact(
+    mods_dir: str,
+    profile_path: str,
+    nif_path_canonical: str,
+) -> tuple[tuple[tuple[str, tuple[float, float, float]], ...], str]:
+    raw, source = _load_nif_bytes_exact(mods_dir, profile_path, nif_path_canonical)
+    if raw is None:
+        return (tuple(), f"missing:{source}")
+
+    positions, detail = _extract_nif_node_positions_from_bytes(raw)
+    items = tuple(sorted(positions.items(), key=lambda item: item[0]))
+    return (items, f"{detail}:{source}")
+
+
+def load_nif_node_positions_for_nif(
+    mods_dir: str,
+    profile_path: str,
+    nif_path_canonical: str,
+) -> tuple[dict[str, tuple[float, float, float]], str]:
+    items, detail = _load_nif_node_positions_exact(mods_dir, profile_path, nif_path_canonical)
+    if items:
+        return ({name: point for name, point in items}, detail)
+
+    fallback_rel = _find_fallback_nif_key(mods_dir, profile_path, nif_path_canonical)
+    if fallback_rel and _canonical_rel_key(fallback_rel) != _canonical_rel_key(nif_path_canonical):
+        fallback_items, fallback_detail = _load_nif_node_positions_exact(mods_dir, profile_path, fallback_rel)
+        if fallback_items:
+            return (
+                {name: point for name, point in fallback_items},
+                f"{fallback_detail};fallback:{fallback_rel}",
+            )
+
+    return ({}, detail)

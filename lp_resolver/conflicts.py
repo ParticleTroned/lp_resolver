@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from math import dist
+from math import dist, isfinite
 import re
 from typing import Any
 
@@ -17,6 +17,8 @@ _WORLDSPACE_COND_RE = re.compile(
     r"getinworldspace\s+([a-z0-9_]+)\s+none\s*==\s*([01])",
     re.IGNORECASE,
 )
+_LP_POINT_KEY_HINTS = ("point", "points", "offset", "position", "pos", "anchor", "location", "coord")
+_LP_NODE_KEY_HINTS = ("node", "nodes")
 
 
 def _norm_node_name(value: str) -> str:
@@ -32,12 +34,29 @@ def _as_xyz(value: Any) -> tuple[float, float, float] | None:
         return None
 
 
+def _as_xyz_mapping(value: Any) -> tuple[float, float, float] | None:
+    if not isinstance(value, dict):
+        return None
+    x = value.get("x", value.get("X"))
+    y = value.get("y", value.get("Y"))
+    z = value.get("z", value.get("Z"))
+    if x is None or y is None or z is None:
+        return None
+    try:
+        return (float(x), float(y), float(z))
+    except (TypeError, ValueError):
+        return None
+
+
 def _iter_lights_lists(value: Any):
     if isinstance(value, dict):
-        lights = value.get("lights")
-        if isinstance(lights, list):
-            yield lights
-        for child in value.values():
+        for key, child in value.items():
+            key_l = str(key).lower()
+            if key_l in {"lights", "light"}:
+                if isinstance(child, list):
+                    yield child
+                elif isinstance(child, dict):
+                    yield [child]
             yield from _iter_lights_lists(child)
     elif isinstance(value, list):
         for child in value:
@@ -45,9 +64,13 @@ def _iter_lights_lists(value: Any):
 
 
 def _extract_nodes(value: Any) -> set[str]:
-    if not isinstance(value, list):
-        return set()
     nodes: set[str] = set()
+    if isinstance(value, str):
+        if value.strip():
+            nodes.add(_norm_node_name(value))
+        return nodes
+    if not isinstance(value, list):
+        return nodes
     for item in value:
         if isinstance(item, str) and item.strip():
             nodes.add(_norm_node_name(item))
@@ -56,15 +79,17 @@ def _extract_nodes(value: Any) -> set[str]:
 
 def _extract_points_from_value(value: Any) -> list[tuple[float, float, float]]:
     points: list[tuple[float, float, float]] = []
+    mapping_point = _as_xyz_mapping(value)
+    if mapping_point is not None:
+        points.append(mapping_point)
+        return points
     if isinstance(value, list):
         single = _as_xyz(value)
         if single is not None:
             points.append(single)
         else:
             for item in value:
-                point = _as_xyz(item)
-                if point is not None:
-                    points.append(point)
+                points.extend(_extract_points_from_value(item))
     return points
 
 
@@ -72,6 +97,7 @@ def _extract_points_from_value(value: Any) -> list[tuple[float, float, float]]:
 class _PlacementSignature:
     nodes: set[str]
     points: list[tuple[float, float, float]]
+    radius_units: float | None
 
 
 def _extract_conditions(value: Any) -> list[str]:
@@ -86,6 +112,45 @@ def _extract_conditions(value: Any) -> list[str]:
     return conditions
 
 
+def _to_positive_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not isfinite(number):
+        return None
+    if number <= 0.0:
+        return None
+    return number
+
+
+def _estimate_entry_radius_units(settings: dict[str, Any]) -> float | None:
+    radii: list[float] = []
+
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                key_l = str(key).lower()
+                if key_l == "radius":
+                    radius = _to_positive_float(child)
+                    if radius is not None:
+                        radii.append(radius)
+                elif key_l == "size":
+                    size = _to_positive_float(child)
+                    if size is not None:
+                        radii.append(size * 12.0)
+                _walk(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                _walk(child)
+
+    _walk(settings)
+    if not radii:
+        return None
+    return sum(radii) / len(radii)
+
+
 def _extract_placement_signature(settings: dict[str, Any]) -> _PlacementSignature:
     nodes: set[str] = set()
     points: list[tuple[float, float, float]] = []
@@ -96,6 +161,7 @@ def _extract_placement_signature(settings: dict[str, Any]) -> _PlacementSignatur
                 continue
 
             nodes |= _extract_nodes(light.get("nodes"))
+            nodes |= _extract_nodes(light.get("node"))
 
             points.extend(_extract_points_from_value(light.get("points")))
             points.extend(_extract_points_from_value(light.get("point")))
@@ -103,8 +169,31 @@ def _extract_placement_signature(settings: dict[str, Any]) -> _PlacementSignatur
             data = light.get("data")
             if isinstance(data, dict):
                 points.extend(_extract_points_from_value(data.get("offset")))
+                points.extend(_extract_points_from_value(data.get("position")))
+                points.extend(_extract_points_from_value(data.get("pos")))
 
-    return _PlacementSignature(nodes=nodes, points=points)
+    # Fallback for non-standard LP schemas where anchors are outside lights[].
+    def _walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                key_l = str(key).lower()
+                if any(hint in key_l for hint in _LP_POINT_KEY_HINTS):
+                    points.extend(_extract_points_from_value(child))
+                if any(hint in key_l for hint in _LP_NODE_KEY_HINTS):
+                    nodes.update(_extract_nodes(child))
+                _walk(child)
+            return
+        if isinstance(value, list):
+            for child in value:
+                _walk(child)
+
+    _walk(settings)
+
+    return _PlacementSignature(
+        nodes=nodes,
+        points=points,
+        radius_units=_estimate_entry_radius_units(settings),
+    )
 
 
 def _extract_worldspace_condition_tokens(settings: dict[str, Any]) -> set[tuple[str, bool]]:
@@ -124,18 +213,13 @@ def _extract_worldspace_condition_tokens(settings: dict[str, Any]) -> set[tuple[
     return tokens
 
 
-def _points_overlap(
+def _min_point_distance(
     lhs: list[tuple[float, float, float]],
     rhs: list[tuple[float, float, float]],
-    epsilon: float = _POINT_OVERLAP_EPSILON,
-) -> bool:
+) -> float | None:
     if not lhs or not rhs:
-        return False
-    for left in lhs:
-        for right in rhs:
-            if dist(left, right) <= epsilon:
-                return True
-    return False
+        return None
+    return min(dist(left, right) for left in lhs for right in rhs)
 
 
 def _entries_overlap(lhs: LightPlacerEntry, rhs: LightPlacerEntry) -> bool:
@@ -143,8 +227,22 @@ def _entries_overlap(lhs: LightPlacerEntry, rhs: LightPlacerEntry) -> bool:
     rhs_sig = _extract_placement_signature(rhs.settings)
 
     # If both define concrete points/offsets, treat near points as stacking.
-    if _points_overlap(lhs_sig.points, rhs_sig.points):
-        return True
+    if lhs_sig.points and rhs_sig.points:
+        min_distance = _min_point_distance(lhs_sig.points, rhs_sig.points)
+        if min_distance is not None and min_distance <= _POINT_OVERLAP_EPSILON:
+            return True
+
+        # Radius-aware rule: catch overlaps where points are farther apart than
+        # fixed epsilon but effective light radii still intersect.
+        left_radius = lhs_sig.radius_units
+        right_radius = rhs_sig.radius_units
+        if (
+            min_distance is not None
+            and left_radius is not None
+            and right_radius is not None
+            and min_distance <= (left_radius + right_radius)
+        ):
+            return True
 
     lhs_has_points = bool(lhs_sig.points)
     rhs_has_points = bool(rhs_sig.points)

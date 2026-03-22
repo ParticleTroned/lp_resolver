@@ -14,7 +14,7 @@ from . import __version__
 from .decisions import Decision, apply_decisions, load_decisions, make_decision, save_decisions
 from .engine import ScanConfig, ScanResult, run_scan
 from .models import Conflict
-from .nif_preview import load_mesh_preview_for_nif, load_nif_bounding_radius_for_nif
+from .nif_preview import load_mesh_preview_for_nif, load_nif_bounding_radius_for_nif, load_nif_node_positions_for_nif
 from .patch_writer import write_patch_mod
 from .priority import choose_keep_highest_entry, entry_priority_sort_key
 
@@ -299,6 +299,33 @@ def _extract_lp_anchor_nodes(settings: dict[str, Any]) -> set[str]:
 
     _walk(settings)
     return nodes
+
+
+def _normalized_node_lookup_key(value: str) -> str:
+    return "".join(ch for ch in value.strip().lower() if ch.isalnum() or ch == "_")
+
+
+def _node_lookup_aliases(value: str) -> set[str]:
+    raw = value.strip().lower()
+    if not raw:
+        return set()
+
+    aliases: set[str] = set()
+    compact = _normalized_node_lookup_key(raw)
+    if compact:
+        aliases.add(compact)
+
+    token: list[str] = []
+    for ch in raw:
+        if ch.isalnum() or ch == "_":
+            token.append(ch)
+            continue
+        if token:
+            aliases.add("".join(token))
+            token = []
+    if token:
+        aliases.add("".join(token))
+    return aliases
 
 
 def _to_positive_float(value: Any) -> float | None:
@@ -2535,15 +2562,32 @@ class MainWindow(QMainWindow):
             self.detail_text.setHtml(self._render_conflict_detail_html(conflict))
             mesh_status, mesh_points = self._load_mesh_preview_for_conflict(conflict)
             nif_radius_hint, _nif_radius_detail = self._load_nif_radius_hint_for_conflict(conflict)
+            node_anchor_points, node_anchor_status = self._load_nif_node_anchor_points_for_conflict(conflict)
             self.anchor_preview.set_anchor_series(
-                self._build_preview_anchor_series(conflict, mesh_points, nif_radius_hint, decision)
+                self._build_preview_anchor_series(
+                    conflict,
+                    mesh_points,
+                    nif_radius_hint,
+                    decision,
+                    node_anchor_points=node_anchor_points,
+                )
             )
-            lp_summary = self._build_anchor_overlap_summary(conflict)
+            lp_summary = self._build_anchor_overlap_summary(conflict, node_anchor_points=node_anchor_points)
             pl_summary = self._build_pl_localization_summary(conflict, mesh_points)
-            projection_note = self._build_projection_note(conflict, mesh_points)
+            projection_note = self._build_projection_note(conflict, mesh_points, node_anchor_points=node_anchor_points)
             self.anchor_summary_label.setText(f"{lp_summary} {pl_summary} {projection_note}".strip())
-            self.mesh_status_label.setText(f"Mesh: {mesh_status}")
-            self.anchor_points_text.setPlainText(self._build_anchor_points_text(conflict, mesh_points, nif_radius_hint))
+            mesh_text = f"Mesh: {mesh_status}"
+            if node_anchor_status:
+                mesh_text += f"\n{node_anchor_status}"
+            self.mesh_status_label.setText(mesh_text)
+            self.anchor_points_text.setPlainText(
+                self._build_anchor_points_text(
+                    conflict,
+                    mesh_points,
+                    nif_radius_hint,
+                    node_anchor_points=node_anchor_points,
+                )
+            )
         except Exception as exc:  # noqa: BLE001
             self.entry_list.blockSignals(False)
             QMessageBox.critical(
@@ -2868,11 +2912,31 @@ class MainWindow(QMainWindow):
         normalized = path.replace("\\", "/")
         return normalized.rsplit("/", 1)[-1]
 
-    def _build_anchor_series(self, conflict: Conflict) -> list[dict[str, Any]]:
+    @staticmethod
+    def _resolve_node_anchor_points(
+        nodes: set[str],
+        node_anchor_points: dict[str, tuple[float, float, float]] | None,
+    ) -> list[tuple[float, float, float]]:
+        if not nodes or not node_anchor_points:
+            return []
+        resolved = [node_anchor_points[node] for node in sorted(nodes) if node in node_anchor_points]
+        return _dedupe_points(_sanitize_points(resolved))
+
+    def _build_anchor_series(
+        self,
+        conflict: Conflict,
+        node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
+    ) -> list[dict[str, Any]]:
         series: list[dict[str, Any]] = []
         for idx, entry in enumerate(conflict.lp_entries):
             points = _extract_lp_anchor_points(entry.settings)
             nodes = _extract_lp_anchor_nodes(entry.settings)
+            point_source = "json" if points else "none"
+            if not points and nodes:
+                node_points = self._resolve_node_anchor_points(nodes, node_anchor_points)
+                if node_points:
+                    points = node_points
+                    point_source = "nif_node"
             radius_units = _estimate_entry_radius_units(entry.settings)
             label = f"{self._short_name(entry.source_file)} [{entry.entry_id[:8]}]"
             series.append(
@@ -2883,6 +2947,7 @@ class MainWindow(QMainWindow):
                     "label": label,
                     "points": points,
                     "nodes": nodes,
+                    "point_source": point_source,
                     "radius_units": radius_units,
                     "winner": False,
                 }
@@ -2895,8 +2960,9 @@ class MainWindow(QMainWindow):
         mesh_points: list[tuple[float, float, float]] | None = None,
         nif_radius_hint: float | None = None,
         decision: Decision | None = None,
+        node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
     ) -> list[dict[str, Any]]:
-        series = self._build_anchor_series(conflict)
+        series = self._build_anchor_series(conflict, node_anchor_points=node_anchor_points)
         mesh_center = _centroid(mesh_points or [])
         mesh_radius = _estimate_mesh_radius_units(mesh_points or [])
         winner_entry_ids: set[str] = set()
@@ -3000,33 +3066,130 @@ class MainWindow(QMainWindow):
             conflict.nif_path_canonical,
         )
 
-    def _build_anchor_overlap_summary(self, conflict: Conflict, threshold: float = 14.0) -> str:
-        series = self._build_anchor_series(conflict)
+    def _load_nif_node_anchor_points_for_conflict(
+        self,
+        conflict: Conflict,
+    ) -> tuple[dict[str, tuple[float, float, float]], str]:
+        requested_nodes = sorted(
+            {
+                node
+                for entry in conflict.lp_entries
+                for node in _extract_lp_anchor_nodes(entry.settings)
+            }
+        )
+        if not requested_nodes:
+            return ({}, "")
+        if self.scan_result is None:
+            return ({}, "NIF node anchors: unavailable (no scan result).")
+
+        node_positions, detail = load_nif_node_positions_for_nif(
+            str(self.scan_result.mods_dir),
+            str(self.scan_result.profile_path),
+            conflict.nif_path_canonical,
+        )
+        if not node_positions:
+            return ({}, f"NIF node anchors: resolved 0/{len(requested_nodes)} ({detail}).")
+
+        canonical: dict[str, tuple[float, float, float]] = {}
+        alias_map: dict[str, tuple[float, float, float]] = {}
+        for raw_name, point in node_positions.items():
+            name = raw_name.strip().lower()
+            if not name:
+                continue
+            canonical.setdefault(name, point)
+            for alias in _node_lookup_aliases(name):
+                alias_map.setdefault(alias, point)
+
+        resolved: dict[str, tuple[float, float, float]] = {}
+        unresolved: list[str] = []
+        for node in requested_nodes:
+            point = canonical.get(node)
+            if point is None:
+                for alias in _node_lookup_aliases(node):
+                    point = alias_map.get(alias)
+                    if point is not None:
+                        break
+            if point is None:
+                unresolved.append(node)
+                continue
+            resolved[node] = point
+
+        status = f"NIF node anchors: resolved {len(resolved)}/{len(requested_nodes)} ({detail})."
+        if unresolved:
+            preview = ", ".join(unresolved[:4])
+            if len(unresolved) > 4:
+                preview += f", +{len(unresolved) - 4} more"
+            status += f" Missing: {preview}."
+        return (resolved, status)
+
+    def _build_anchor_overlap_summary(
+        self,
+        conflict: Conflict,
+        threshold: float = 14.0,
+        node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
+    ) -> str:
+        series = self._build_anchor_series(conflict, node_anchor_points=node_anchor_points)
         if len(series) < 2:
             return "Need at least two LP entries to evaluate overlap."
 
         pairs_with_points = 0
-        overlapping_pairs = 0
+        distance_overlap_pairs = 0
+        radius_overlap_pairs = 0
+        radius_capable_pairs = 0
         min_pair_distance: float | None = None
 
         for i in range(len(series)):
             left_points = series[i]["points"]
+            left_radius_raw = series[i].get("radius_units")
+            try:
+                left_radius = float(left_radius_raw)
+            except (TypeError, ValueError):
+                left_radius = 0.0
+            if not isfinite(left_radius) or left_radius <= 0.0:
+                left_radius = 0.0
+
             for j in range(i + 1, len(series)):
                 right_points = series[j]["points"]
+                right_radius_raw = series[j].get("radius_units")
+                try:
+                    right_radius = float(right_radius_raw)
+                except (TypeError, ValueError):
+                    right_radius = 0.0
+                if not isfinite(right_radius) or right_radius <= 0.0:
+                    right_radius = 0.0
+
                 if not left_points or not right_points:
                     continue
                 pairs_with_points += 1
                 local_min = min(dist(lp, rp) for lp in left_points for rp in right_points)
                 min_pair_distance = local_min if min_pair_distance is None else min(min_pair_distance, local_min)
                 if local_min <= threshold:
-                    overlapping_pairs += 1
+                    distance_overlap_pairs += 1
+                    continue
+                if left_radius > 0.0 and right_radius > 0.0:
+                    radius_capable_pairs += 1
+                    if local_min <= (left_radius + right_radius):
+                        radius_overlap_pairs += 1
 
         if pairs_with_points > 0:
+            overlapping_pairs = distance_overlap_pairs + radius_overlap_pairs
             min_text = "n/a" if min_pair_distance is None else f"{min_pair_distance:.2f}"
             if overlapping_pairs > 0:
+                criteria_hits: list[str] = []
+                if distance_overlap_pairs > 0:
+                    criteria_hits.append(f"fixed<= {threshold:.1f}: {distance_overlap_pairs}")
+                if radius_overlap_pairs > 0:
+                    criteria_hits.append(f"radius-aware: {radius_overlap_pairs}")
+                criteria_text = " | ".join(criteria_hits) if criteria_hits else "n/a"
                 return (
-                    f"Likely stacking: {overlapping_pairs}/{pairs_with_points} LP entry pairs have nearest anchor distance <= {threshold:.1f}. "
-                    f"Minimum pair distance: {min_text}."
+                    f"Likely stacking: {overlapping_pairs}/{pairs_with_points} LP entry pairs overlap "
+                    f"(fixed<= {threshold:.1f} or radius-aware). "
+                    f"Hits: {criteria_text}. Minimum pair distance: {min_text}."
+                )
+            if radius_capable_pairs > 0:
+                return (
+                    f"Likely disjoint refinement: 0/{pairs_with_points} LP entry pairs satisfy "
+                    f"fixed<= {threshold:.1f} or radius-aware overlap. Minimum pair distance: {min_text}."
                 )
             return (
                 f"Likely disjoint refinement: 0/{pairs_with_points} LP entry pairs are within {threshold:.1f}. "
@@ -3094,10 +3257,15 @@ class MainWindow(QMainWindow):
         self,
         conflict: Conflict,
         mesh_points: list[tuple[float, float, float]] | None = None,
+        node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
     ) -> str:
         points: list[tuple[float, float, float]] = []
         for entry in conflict.lp_entries:
-            points.extend(_extract_lp_anchor_points(entry.settings))
+            entry_points = _extract_lp_anchor_points(entry.settings)
+            if not entry_points:
+                entry_nodes = _extract_lp_anchor_nodes(entry.settings)
+                entry_points = self._resolve_node_anchor_points(entry_nodes, node_anchor_points)
+            points.extend(entry_points)
 
         mesh_center = _centroid(mesh_points or [])
         for target in conflict.pl_targets:
@@ -3123,11 +3291,18 @@ class MainWindow(QMainWindow):
         conflict: Conflict,
         mesh_points: list[tuple[float, float, float]] | None = None,
         nif_radius_hint: float | None = None,
+        node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
     ) -> str:
         lines: list[str] = []
         for idx, entry in enumerate(conflict.lp_entries, start=1):
             points = _extract_lp_anchor_points(entry.settings)
             nodes = sorted(_extract_lp_anchor_nodes(entry.settings))
+            points_from_nodes = False
+            if not points and nodes:
+                node_points = self._resolve_node_anchor_points(set(nodes), node_anchor_points)
+                if node_points:
+                    points = node_points
+                    points_from_nodes = True
             radius_units = _estimate_entry_radius_units(entry.settings)
             light_value_summaries = _extract_lp_light_value_summaries(entry.settings)
             label = f"{idx}. {self._short_name(entry.source_file)} [{entry.entry_id[:8]}]"
@@ -3140,7 +3315,10 @@ class MainWindow(QMainWindow):
                 formatted_points = ", ".join(f"({p[0]:.1f}, {p[1]:.1f}, {p[2]:.1f})" for p in points[:12])
                 if len(points) > 12:
                     formatted_points += f", +{len(points) - 12} more"
-                lines.append(f"   points: {formatted_points}")
+                if points_from_nodes:
+                    lines.append(f"   points: {formatted_points} (resolved from NIF node transform)")
+                else:
+                    lines.append(f"   points: {formatted_points}")
             else:
                 lines.append("   points: (none)")
 
