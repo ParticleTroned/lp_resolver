@@ -15,11 +15,11 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 - Scans LP JSON entries and PL targets.
 - Detects conflict types such as:
-- `duplicate_exact`
-- `duplicate_divergent`
-- `duplicate_condition_exclusive`
-- `duplicate_refinement_disjoint`
-- `lp_vs_pl_overlap`
+- `Exact Duplicates`
+- `Divergent Duplicates`
+- `Worldspace Splits`
+- `Refinements`
+- `Overlap`
 - Lets you apply decisions per conflict and export an MO2 patch mod that uses normal last-wins override behavior.
 
 ## Why It Is Useful
