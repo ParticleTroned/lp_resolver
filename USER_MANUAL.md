@@ -5,6 +5,24 @@ This guide is for first-time users. It explains what the tool changes, how mod l
 
 ---
 
+## 0. Steam OS/Proton Support
+
+Recommended on SteamOS: run the app with native Linux Python instead of the Windows `.exe` via Proton.
+
+```bash
+cd /path/to/lp_resolver
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m lp_resolver.gui
+```
+
+If you still test the Windows `.exe` under Proton, set `Start in` to the app folder and enable logs with:
+`PROTON_LOG=1 QT_DEBUG_PLUGINS=1 %command%`
+
+---
+
 ## 1. What This Tool Does
 
 The resolver scans your active MO2 or Vortex profile and finds lighting conflicts:

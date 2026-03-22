@@ -42,6 +42,7 @@ See the detailed install/build/run steps in the sections below.
 ## Requirements
 
 - Windows (for packaged EXE workflow)
+- Linux/SteamOS (for source/Python workflow)
 - Python 3.10+
 - Mod Organizer 2 setup with `mods/` and `profiles/`, or
 - Vortex profile + staging mods directory
@@ -106,6 +107,25 @@ Version:
 ```powershell
 python -m lp_resolver.cli --version
 ```
+
+## SteamOS / Linux
+
+Recommended: run from source with native Linux Python (instead of Windows `.exe` through Proton).
+
+```bash
+cd /path/to/lp_resolver
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m lp_resolver.gui
+```
+
+If you still test the Windows build under Proton:
+
+- Use the full built app folder, not only the `.exe`.
+- Set MO2 `Start in` to that app folder.
+- Use `PROTON_LOG=1 QT_DEBUG_PLUGINS=1 %command%` to capture startup errors.
 
 ## Build Windows App
 
