@@ -1132,7 +1132,7 @@ class MainWindow(QMainWindow):
         self._scan_in_progress = False
         self._updating_conflicts_table = False
         self._is_closing = False
-        self._conflict_min_widths = [96, 82, 96, 40, 40, 88]
+        self._conflict_min_widths = [72, 64, 72, 32, 32, 72]
 
         self._build_ui()
         self._load_persistent_paths()
@@ -1158,12 +1158,13 @@ class MainWindow(QMainWindow):
         scan_layout.addWidget(controls)
         scan_layout.addWidget(self.summary_label)
 
-        conflicts_panel.setMinimumWidth(240)
-        details_panel.setMinimumWidth(280)
-        controls.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        conflicts_panel.setMinimumWidth(180)
+        details_panel.setMinimumWidth(220)
+        controls.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
         self.summary_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        scan_panel.setMinimumWidth(0)
         scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
-        scan_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        scan_panel.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Maximum)
         conflicts_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         details_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
@@ -1177,6 +1178,7 @@ class MainWindow(QMainWindow):
         self.left_splitter.setStretchFactor(1, 1)
         self.left_splitter.setSizes([210, 790])
         self.left_splitter.splitterMoved.connect(self._on_left_splitter_moved)
+        self.left_splitter.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
 
         self.content_splitter = QSplitter(Qt.Horizontal)
         self.content_splitter.setChildrenCollapsible(False)
@@ -1186,6 +1188,8 @@ class MainWindow(QMainWindow):
         self.content_splitter.addWidget(details_panel)
         self.content_splitter.setStretchFactor(0, 1)
         self.content_splitter.setStretchFactor(1, 1)
+        self.content_splitter.setCollapsible(0, True)
+        self.content_splitter.setCollapsible(1, False)
         self.content_splitter.setSizes([920, 880])
         self.content_splitter.splitterMoved.connect(self._on_content_splitter_moved)
 
@@ -1354,6 +1358,9 @@ class MainWindow(QMainWindow):
             "Paths should point to your MO2 or Vortex setup and desired report location."
         )
         grid = QGridLayout(group)
+        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 0)
 
         self.mo2_root_edit = QLineEdit("")
         self.mo2_root_edit.setPlaceholderText("C:\\Path\\To\\MO2  (or E:\\modding\\vortex)")
@@ -1492,7 +1499,9 @@ class MainWindow(QMainWindow):
             "worldspace-split variants, or hand-tuned multi-light compositions."
         )
 
-        grid.addWidget(QLabel("MO2 Root/Vortex mod staging folder"), 0, 0)
+        mods_root_label = QLabel("MO2 Root/Vortex mod staging folder")
+        mods_root_label.setWordWrap(True)
+        grid.addWidget(mods_root_label, 0, 0)
         grid.addWidget(self.mo2_root_edit, 0, 1)
         grid.addWidget(browse_mo2_btn, 0, 2)
         grid.addWidget(QLabel("Profile Path"), 1, 0)
@@ -1520,16 +1529,33 @@ class MainWindow(QMainWindow):
         filter_row_secondary.addStretch(1)
         grid.addLayout(filter_row_secondary, 6, 0, 1, 3)
 
-        button_row = QHBoxLayout()
-        button_row.addWidget(self.scan_btn)
-        button_row.addWidget(load_decisions_btn)
-        button_row.addWidget(save_decisions_btn)
-        button_row.addWidget(export_patch_btn)
-        button_row.addWidget(clear_all_decisions_btn)
-        button_row.addWidget(apply_overlap_disable_btn)
-        button_row.addWidget(apply_highest_duplicates_btn)
-        button_row.addStretch(1)
-        grid.addLayout(button_row, 7, 0, 1, 3)
+        for btn in (
+            self.scan_btn,
+            load_decisions_btn,
+            save_decisions_btn,
+            export_patch_btn,
+            clear_all_decisions_btn,
+        ):
+            btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        apply_overlap_disable_btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+        apply_highest_duplicates_btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+
+        button_row_primary = QHBoxLayout()
+        button_row_primary.setSpacing(6)
+        button_row_primary.addWidget(self.scan_btn)
+        button_row_primary.addWidget(load_decisions_btn)
+        button_row_primary.addWidget(save_decisions_btn)
+        button_row_primary.addWidget(export_patch_btn)
+        button_row_primary.addWidget(clear_all_decisions_btn)
+        button_row_primary.addStretch(1)
+        grid.addLayout(button_row_primary, 7, 0, 1, 3)
+
+        button_row_secondary = QHBoxLayout()
+        button_row_secondary.setSpacing(6)
+        button_row_secondary.addWidget(apply_overlap_disable_btn)
+        button_row_secondary.addWidget(apply_highest_duplicates_btn)
+        button_row_secondary.addStretch(1)
+        grid.addLayout(button_row_secondary, 8, 0, 1, 3)
 
         return group
 
@@ -1565,7 +1591,7 @@ class MainWindow(QMainWindow):
         )
 
         header = self.conflicts_table.horizontalHeader()
-        header.setMinimumSectionSize(36)
+        header.setMinimumSectionSize(28)
         header.setSectionResizeMode(0, QHeaderView.Interactive)  # NIF
         header.setSectionResizeMode(1, QHeaderView.Interactive)  # Types
         header.setSectionResizeMode(2, QHeaderView.Interactive)  # LP Mods
