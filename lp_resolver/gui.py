@@ -1253,7 +1253,7 @@ class MainWindow(QMainWindow):
         self.content_splitter.setStretchFactor(1, 1)
         self.content_splitter.setCollapsible(0, True)
         self.content_splitter.setCollapsible(1, False)
-        self.content_splitter.setSizes([920, 880])
+        self.content_splitter.setSizes([1080, 720])
         self.content_splitter.splitterMoved.connect(self._on_content_splitter_moved)
 
         layout.addWidget(self.content_splitter)
@@ -1534,19 +1534,24 @@ class MainWindow(QMainWindow):
         export_patch_btn.setToolTip(
             "Generate patch mod JSON from current decisions.\n"
             "Writes overrides at original LightPlacer source paths under MO2 mods/<PatchName>/\n"
-            "so MO2 last-wins behavior applies."
+            "so MO2 last-wins behavior applies.\n"
+            "For Vortex profiles, writes to the Vortex mods staging folder under <PatchName>/\n"
+            "(for example E:\\modding\\vortex\\<PatchName> or E:\\modding\\vortex\\<game>\\<PatchName>).\n"
+            "Vortex: ensure this patch mod has higher deployment/conflict priority than all other\n"
+            "mods that provide LightPlacer JSON files, so the patch files win."
         )
         load_decisions_btn.clicked.connect(self.load_decisions_from_disk)
         save_decisions_btn.clicked.connect(self.save_decisions_to_disk)
         export_patch_btn.clicked.connect(self.export_patch_mod)
         clear_all_decisions_btn.clicked.connect(self.clear_all_decisions)
 
-        apply_overlap_disable_btn = QPushButton("Disable LP For All Overlaps")
+        apply_overlap_disable_btn = QPushButton("Disable LP for PL overlaps")
         apply_overlap_disable_btn.clicked.connect(self.apply_disable_for_all_overlaps)
         apply_highest_duplicates_btn = QPushButton("Keep Highest For All Duplicates")
         apply_highest_duplicates_btn.clicked.connect(self.apply_keep_highest_for_all_duplicates)
         apply_overlap_disable_btn.setToolTip(
-            "Bulk action: set decision 'disable_lp' for every LP-vs-PL overlap conflict."
+            "Bulk action: for every Light Placer versus Particle Lights overlap conflict, "
+            "disable Light Placer entries in the exported patch."
         )
         apply_highest_duplicates_btn.setToolTip(
             "Bulk action: set decision 'keep_highest_priority' for duplicate conflicts.\n"
@@ -1558,6 +1563,8 @@ class MainWindow(QMainWindow):
             "5) source_mod\n"
             "6) source_file\n"
             "7) entry_id\n"
+            "Vortex note: Keep Highest currently cannot determine priority order reliably from Vortex lists.\n"
+            "For Vortex profiles, review results manually before exporting.\n"
             "Use with care: avoid this when duplicates are intentional refinements,\n"
             "worldspace-split variants, or hand-tuned multi-light compositions."
         )
@@ -1582,15 +1589,12 @@ class MainWindow(QMainWindow):
         filter_row_primary.addWidget(self.only_overlap_cb)
         filter_row_primary.addWidget(self.include_refinements_cb)
         filter_row_primary.addWidget(self.include_worldspace_divergent_cb)
+        filter_row_primary.addSpacing(12)
+        filter_row_primary.addWidget(self.cross_mod_duplicates_cb)
+        filter_row_primary.addWidget(self.ignore_duplicate_exact_cb)
+        filter_row_primary.addWidget(self.include_overridden_files_cb)
         filter_row_primary.addStretch(1)
         grid.addLayout(filter_row_primary, 5, 0, 1, 3)
-
-        filter_row_secondary = QHBoxLayout()
-        filter_row_secondary.addWidget(self.cross_mod_duplicates_cb)
-        filter_row_secondary.addWidget(self.ignore_duplicate_exact_cb)
-        filter_row_secondary.addWidget(self.include_overridden_files_cb)
-        filter_row_secondary.addStretch(1)
-        grid.addLayout(filter_row_secondary, 6, 0, 1, 3)
 
         for btn in (
             self.scan_btn,
@@ -1598,10 +1602,10 @@ class MainWindow(QMainWindow):
             save_decisions_btn,
             export_patch_btn,
             clear_all_decisions_btn,
+            apply_overlap_disable_btn,
+            apply_highest_duplicates_btn,
         ):
             btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        apply_overlap_disable_btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        apply_highest_duplicates_btn.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
 
         button_row_primary = QHBoxLayout()
         button_row_primary.setSpacing(6)
@@ -1610,15 +1614,10 @@ class MainWindow(QMainWindow):
         button_row_primary.addWidget(save_decisions_btn)
         button_row_primary.addWidget(export_patch_btn)
         button_row_primary.addWidget(clear_all_decisions_btn)
+        button_row_primary.addWidget(apply_overlap_disable_btn)
+        button_row_primary.addWidget(apply_highest_duplicates_btn)
         button_row_primary.addStretch(1)
-        grid.addLayout(button_row_primary, 7, 0, 1, 3)
-
-        button_row_secondary = QHBoxLayout()
-        button_row_secondary.setSpacing(6)
-        button_row_secondary.addWidget(apply_overlap_disable_btn)
-        button_row_secondary.addWidget(apply_highest_duplicates_btn)
-        button_row_secondary.addStretch(1)
-        grid.addLayout(button_row_secondary, 8, 0, 1, 3)
+        grid.addLayout(button_row_primary, 6, 0, 1, 3)
 
         return group
 
@@ -1706,6 +1705,8 @@ class MainWindow(QMainWindow):
             "- Choose Entries: keep selected LP entries (multi-select)\n"
             "- Disable LP: export no LP entries for this NIF\n"
             "Note: Keep Highest is not quality-aware; it only follows priority/tie-break order.\n"
+            "Vortex note: Keep Highest currently cannot determine priority order reliably from Vortex lists.\n"
+            "For Vortex profiles, review results manually before exporting.\n"
             "Anchor Preview legend: winner entry/target is shown in bold black text."
         )
         self._mark_as_dropdown(self.action_combo)
@@ -2185,7 +2186,7 @@ class MainWindow(QMainWindow):
         self._splitter_sizes_initialized = True
         self.scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         total_width = max(1, self.content_splitter.size().width())
-        left_target = max(360, min(int(total_width * 0.52), total_width - 300))
+        left_target = max(360, min(int(total_width * 0.60), total_width - 300))
         self.content_splitter.setSizes([left_target, max(1, total_width - left_target)])
         total_height = max(1, self.left_splitter.size().height())
         scan_min = max(self.scan_panel.minimumHeight(), self.scan_panel.minimumSizeHint().height())
@@ -2216,7 +2217,9 @@ class MainWindow(QMainWindow):
         summary_h = self.summary_label.sizeHint().height()
         spacing = max(0, scan_layout.spacing())
         desired = controls_h + summary_h + spacing + margins.top() + margins.bottom() + 6
-        return max(170, min(300, desired))
+        # Keep controls visible (including second button row) while still bounding
+        # growth on very narrow widths where wrapping can explode height.
+        return max(170, min(420, desired))
 
     def _fit_window_to_available_geometry(self) -> None:
         if self.isMaximized() or self.isFullScreen():

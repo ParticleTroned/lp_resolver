@@ -1,5 +1,5 @@
 # Placed Lights and Particle Lights Conflict Resolver  
-Version: 0.1.4
+Version: 0.1.5
 
 This guide is for first-time users. It explains what the tool changes, how mod load order affects results (MO2 or Vortex), and how to export a safe patch.
 
@@ -17,21 +17,28 @@ Then it lets you choose which LP entries should stay (single or multiple) and ex
 Important:
 
 - Source mods are not edited.
-- The patch works by writing JSON files at the same virtual `LightPlacer/...` paths, so MO2 last-wins behavior applies.
+- The patch works by writing JSON files at the same virtual `LightPlacer/...` paths.
+- Effective winner is controlled by your mod manager priority/deployment order (MO2 or Vortex).
 
 ---
 
-## 2. Before You Start (MO2 Load Order Basics)
+## 2. Before You Start (Order Basics: MO2 and Vortex)
 
-In MO2, if two mods provide the same file path, only one is effective:
+If two enabled mods provide the same loose file path, only one is effective:
 
-- The mod with higher effective priority (later/overwriting in left pane) wins.
-- Lower-priority file is overridden and normally has no in-game effect.
+- MO2: winner is controlled by MO2 mod priority (effective left-pane overwrite order).
+- Vortex: winner is controlled by Vortex deployment/conflict rules between mods.
 
 Why this matters:
 
 - With `Include Overridden` OFF (recommended), scan focuses on effective winners only.
 - With `Include Overridden` ON, you can inspect hidden/overridden files too (useful for debugging, noisier results).
+
+Vortex priority note (important):
+
+- `Keep Highest` is reliable for MO2 order data.
+- For Vortex, absolute mod priority is currently not reliably derivable for all rule/state combinations from exported profile files alone.
+- For Vortex profiles, choose decisions manually (`Choose Entries` / `Disable LP`) and ensure your exported patch mod has highest deployment/conflict priority among mods shipping `LightPlacer` JSON.
 
 ---
 
@@ -39,10 +46,15 @@ Why this matters:
 
 1. Open the app.
 2. Set:
-- `MO2 Root` (folder that contains `mods` and `profiles`)
+- `MO2 Root/Vortex mod staging folder`
 - `Profile Path` (exact profile folder)
 - `Output Dir` (report output)
-3. Keep defaults for first scan:
+3. Path selection details:
+- MO2 root example: `C:\Path\To\MO2` (contains `mods` and `profiles`).
+- Vortex staging folder example: `E:\modding\vortex` (the folder where deployed mod folders live).
+- MO2 profile path must contain `modlist.txt`.
+- Vortex profile path example: `C:\Users\<user>\AppData\Roaming\Vortex\skyrimse\profiles\<ProfileId>` and should contain `plugins.txt` and `loadorder.txt`.
+4. Keep defaults for first scan:
 - `Light Source: Both`
 - `Overlap Only`: OFF
 - `Include Refinements`: OFF
@@ -50,26 +62,28 @@ Why this matters:
 - `Cross-Mod Duplicates`: optional
 - `Ignore Exact Duplicates`: optional
 - `Include Overridden`: OFF
-4. Click `Scan`.
-5. Select a conflict row, review right panel:
+5. Click `Scan`.
+6. Select a conflict row, review right panel:
 - Anchor preview (XY/XZ)
 - LP/PL entries
 - Type notes and divergence snapshot
-6. Optional: right-click selected conflict row(s) to open contributing source folder(s) in Windows Explorer.
-7. Choose decision in `Action`:
+7. Optional: right-click selected conflict row(s) to open contributing source folder(s) in Windows Explorer.
+8. Choose decision in `Action`:
 - `Ignore`
-- `Keep Highest Priority LP` (order: MO2 position, PortalStrict for divergent same-worldspace, radius, fade, source_mod, source_file, entry_id)
+- `Keep Highest` (order: MO2 position, PortalStrict for divergent same-worldspace, radius, fade, source_mod, source_file, entry_id)
 - `Choose Entries` (supports selecting multiple LP entries to keep)
 - `Disable LP`
-8. Click `Apply To Selected`.
-9. Optional bulk helpers:
+  Vortex: prefer `Choose Entries` / `Disable LP` manual review instead of relying on `Keep Highest`.
+9. Click `Apply To Selected`.
+10. Optional bulk helpers:
 - `Clear All Decisions`
-- `Disable All Overlaps`
-- `Keep Highest For Duplicates`
-10. Repeat for conflicts you care about.
-11. Click `Export Patch`.
-12. Put patch mod low in MO2 left pane so it wins.
-    Place it after `PGPatcher`.
+- `Disable LP for PL overlaps`
+- `Keep Highest For All Duplicates`
+11. Repeat for conflicts you care about.
+12. Click `Export Patch`.
+13. Ensure patch priority is highest so overrides win:
+- MO2: put patch mod low in left pane (after other LightPlacer JSON providers, for example after `PGPatcher`).
+- Vortex: set patch mod deployment/conflict priority above all mods that provide LightPlacer JSON.
 
 ---
 
@@ -147,7 +161,7 @@ If screenshots are not available yet, keep these image links as placeholders and
 
 `Include Overridden`
 
-- Includes files that are currently overridden in MO2.
+- Includes files currently overridden by higher-priority mods.
 - Use for audit/debug, not for normal cleanup.
 
 ---
@@ -185,10 +199,16 @@ If screenshots are not available yet, keep these image links as placeholders and
 
 Export creates patch files under your patch mod folder:
 
-- override JSONs at original LightPlacer paths (MO2 last-wins)
+- override JSONs at original LightPlacer paths
 - `resolver_decisions.json` (saved decisions)
 - `resolver_report.md` (summary)
 - `resolver_managed_files.json` (tracks generated overrides for cleanup)
+
+Patch location by manager:
+
+- MO2: `<MO2 Root>\mods\<Patch Mod Name>\...`
+- Vortex: `<Vortex mod staging folder>\<Patch Mod Name>\...` (or `<staging>\<game>\<Patch Mod Name>\...`, depending staging layout)
+- `Output Dir` is for reports/decision files; it is not the patch mod folder.
 
 Behavior:
 
@@ -198,6 +218,7 @@ Behavior:
 - If `resolver_decisions.json` exists in Output Dir, it is auto-loaded after scan.
 - Stale decisions (no longer matching current conflicts) are skipped safely.
 - Using `Save Decisions` also stores the current path fields and patch mod name.
+- For Vortex, set the exported patch mod to highest deploy/conflict priority so patch JSON wins.
 
 ---
 
@@ -205,7 +226,7 @@ Behavior:
 
 To revert fully:
 
-1. Disable patch mod in MO2.
+1. Disable patch mod in MO2 or Vortex.
 2. Or delete patch mod folder.
 3. Re-export with different decisions any time.
 
