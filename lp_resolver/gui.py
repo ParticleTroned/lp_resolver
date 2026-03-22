@@ -20,7 +20,7 @@ from .priority import choose_keep_highest_entry, entry_priority_sort_key
 
 try:
     from PySide6.QtCore import QItemSelectionModel, QObject, QPointF, QSettings, Qt, QThread, QUrl, Signal, Slot
-    from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPainterPath, QPen
+    from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPainterPath, QPen, QTextOption
     from PySide6.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -215,10 +215,13 @@ def _extract_points_from_value(value: Any) -> list[tuple[float, float, float]]:
 
 def _iter_lights_lists(value: Any):
     if isinstance(value, dict):
-        lights = value.get("lights")
-        if isinstance(lights, list):
-            yield lights
-        for child in value.values():
+        for key, child in value.items():
+            key_l = str(key).lower()
+            if key_l in {"lights", "light"}:
+                if isinstance(child, list):
+                    yield child
+                elif isinstance(child, dict):
+                    yield [child]
             yield from _iter_lights_lists(child)
     elif isinstance(value, list):
         for child in value:
@@ -343,7 +346,7 @@ def _estimate_entry_radius_units(settings: dict[str, Any]) -> float | None:
     return sum(radii) / len(radii)
 
 
-def _compact_value_text(value: Any, max_len: int = 80) -> str:
+def _compact_value_text(value: Any, max_len: int = 120) -> str:
     if value is None:
         return "(none)"
     if isinstance(value, (dict, list, tuple)):
@@ -352,13 +355,26 @@ def _compact_value_text(value: Any, max_len: int = 80) -> str:
         text = str(value)
     if len(text) <= max_len:
         return text
-    return f"{text[: max_len - 3]}..."
+    head_len = max(16, max_len - 14)
+    tail_len = min(10, max(0, len(text) - head_len))
+    return f"{text[:head_len]}...{text[-tail_len:] if tail_len else ''}"
+
+
+def _lookup_case_insensitive(mapping: dict[str, Any], key: str) -> Any:
+    if key in mapping:
+        return mapping[key]
+    key_l = key.lower()
+    for raw_key, raw_value in mapping.items():
+        if str(raw_key).lower() == key_l:
+            return raw_value
+    return None
 
 
 def _extract_lp_light_value_summaries(settings: dict[str, Any]) -> list[str]:
     summaries: list[str] = []
     seen: set[str] = set()
     preferred_keys = ("light", "fade", "cutoff", "size", "radius", "flags", "color")
+    skip_keys = {"data", "point", "points", "node", "nodes", "nif", "mesh", "model", "path"}
 
     for lights in _iter_lights_lists(settings):
         for light in lights:
@@ -367,11 +383,31 @@ def _extract_lp_light_value_summaries(settings: dict[str, Any]) -> list[str]:
             data = light.get("data")
             data_map = data if isinstance(data, dict) else {}
             parts: list[str] = []
+            used_keys: set[str] = set()
             for key in preferred_keys:
-                raw_value = data_map.get(key, light.get(key))
+                raw_value = _lookup_case_insensitive(data_map, key)
+                if raw_value is None:
+                    raw_value = _lookup_case_insensitive(light, key)
                 if raw_value is None:
                     continue
+                used_keys.add(key.lower())
                 parts.append(f"{key}={_compact_value_text(raw_value)}")
+
+            # Fallback: when preferred keys are missing, include any scalar-ish fields from
+            # data/light blocks so values are still visible for non-standard LP schemas.
+            if not parts:
+                for source in (data_map, light):
+                    for raw_key, raw_value in sorted(source.items(), key=lambda item: str(item[0]).lower()):
+                        key_l = str(raw_key).lower()
+                        if key_l in skip_keys or key_l in used_keys:
+                            continue
+                        if raw_value is None:
+                            continue
+                        parts.append(f"{raw_key}={_compact_value_text(raw_value, max_len=72)}")
+                        if len(parts) >= 8:
+                            break
+                    if len(parts) >= 8:
+                        break
             if not parts:
                 continue
             summary = ", ".join(parts)
@@ -1695,7 +1731,8 @@ class MainWindow(QMainWindow):
 
         self.detail_text = QTextEdit()
         self.detail_text.setReadOnly(True)
-        self.detail_text.setLineWrapMode(QTextEdit.NoWrap)
+        self.detail_text.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.detail_text.setWordWrapMode(QTextOption.WrapAnywhere)
         self.detail_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.detail_text.setToolTip(
             "Detailed conflict breakdown:\n"
@@ -1727,7 +1764,8 @@ class MainWindow(QMainWindow):
         self.mesh_status_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.anchor_points_text = QTextEdit()
         self.anchor_points_text.setReadOnly(True)
-        self.anchor_points_text.setLineWrapMode(QTextEdit.NoWrap)
+        self.anchor_points_text.setLineWrapMode(QTextEdit.WidgetWidth)
+        self.anchor_points_text.setWordWrapMode(QTextOption.WrapAnywhere)
         self.anchor_points_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.anchor_points_text.setMinimumHeight(64)
         self.anchor_points_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
