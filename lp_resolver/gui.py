@@ -1284,7 +1284,7 @@ class MainWindow(QMainWindow):
         menu_layout.setContentsMargins(10, 10, 10, 10)
         menu_layout.setSpacing(6)
 
-        self.light_scale_enabled_cb = QCheckBox("Enable Separate Intensity Patch")
+        self.light_scale_enabled_cb = QCheckBox("Enable Separate Intensity Patch (Experimental)")
         self.light_scale_enabled_cb.setToolTip(
             "When enabled, Export Patch writes a second patch mod after conflict export.\n"
             "That second mod scales light intensity in effective winner LP JSON files."

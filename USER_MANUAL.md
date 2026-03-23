@@ -1,5 +1,5 @@
 # Placed Lights and Particle Lights Conflict Resolver  
-Version: 0.1.5
+Version: 0.1.6
 
 This guide is for first-time users. It explains what the tool changes, how mod load order affects results (MO2 or Vortex), and how to export a safe patch.
 
@@ -99,7 +99,7 @@ Vortex priority note (important):
 - `Keep Highest For All Duplicates`
 11. Repeat for conflicts you care about.
 12. Click `Export Patch`.
-13. Optional: click `Light Scale` (next to `Patch Mod Name`) and enable a second post-resolution patch:
+13. Optional: click `Light Scale` (next to `Patch Mod Name`) and enable `Enable Separate Intensity Patch (Experimental)`:
 - scale slider: `0.50` to `2.00` (`1.00` keeps current values)
 - scope: `All Entries`, `Interior Only`, or `Exterior Only`
 - optional `PortalStrict only` filter
@@ -190,6 +190,7 @@ If screenshots are not available yet, keep these image links as placeholders and
 `Light Scale` (drop-down menu)
 
 - Optional second export patch that scales intensity-like LP values after decisions are applied.
+- Scope of export: all effective winner LP JSON paths, not only conflict rows.
 - Slider range: `0.50` to `2.00` (`1.00` = unchanged).
 - Scope filter: `All Entries`, `Interior Only`, `Exterior Only` (uses `GetInWorldspace ... == 0/1` conditions).
 - `PortalStrict only`: additional filter on top of scope.
@@ -197,7 +198,41 @@ If screenshots are not available yet, keep these image links as placeholders and
 
 ---
 
-## 6. Conflict Types (How to Interpret)
+## 6. Light Scale Patch (Detailed)
+
+The `Light Scale` feature creates a second patch after normal conflict resolution.  
+Use it when you want global brightness tuning across effective LP winner files, not only conflict rows.
+
+How export order works:
+
+- First patch: `<Patch Mod Name>` (decision patch, conflict cleanup).
+- Second patch (optional): `<Patch Mod Name>_LightIntensityPatch` (intensity scaling).
+- The second patch must load after the first patch and after other LightPlacer JSON providers.
+
+What each option does:
+
+- `Enable Separate Intensity Patch (Experimental)`: turns second-patch export on/off.
+- `Scale` slider (`0.50` to `2.00`): `0.50` halves supported values, `1.00` keeps values unchanged, `2.00` doubles values.
+- `Scope`: `All Entries` = no worldspace filter, `Interior Only` = scales entries with `GetInWorldspace ... == 0`, `Exterior Only` = scales entries with `GetInWorldspace ... == 1`.
+- `PortalStrict only`: only scales entries detected as PortalStrict; can be combined with any scope.
+
+Important behavior:
+
+- Scaling is applied after decisions (`Ignore`, `Keep Highest`, `Choose Entries`, `Disable LP`) are resolved.
+- The second patch exports all effective winner LP JSON paths (including non-conflict LP entries), so it can override broadly.
+- Entries that do not match scope/PortalStrict filters are still exported unchanged in the second patch.
+- If `Scope` is interior/exterior and an entry has no matching worldspace condition, it is not scaled.
+
+Practical tuning workflow:
+
+1. Resolve conflicts and export once with `Light Scale` disabled.
+2. Enable `Light Scale`, start with small steps (`0.90` to `1.10`), export again.
+3. Keep `_LightIntensityPatch` last in MO2/Vortex order.
+4. Test in-game and iterate scale in small increments.
+
+---
+
+## 7. Conflict Types (How to Interpret)
 
 `Overlap`
 
@@ -226,7 +261,7 @@ If screenshots are not available yet, keep these image links as placeholders and
 
 ---
 
-## 7. What Export Actually Writes
+## 8. What Export Actually Writes
 
 Export creates patch files under your patch mod folder:
 
@@ -254,7 +289,7 @@ Behavior:
 
 ---
 
-## 8. Safety / Rollback
+## 9. Safety / Rollback
 
 To revert fully:
 
