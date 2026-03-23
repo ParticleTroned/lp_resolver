@@ -11,9 +11,41 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path $PSScriptRoot
 Set-Location $repoRoot
 
+function Remove-DirectoryWithRetry {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath,
+        [string]$ProcessNameHint = "",
+        [int]$MaxAttempts = 6,
+        [int]$DelayMs = 1200
+    )
+
+    if (-not (Test-Path $TargetPath)) {
+        return
+    }
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+            # Best-effort clear read-only attributes before deletion.
+            cmd /c "attrib -R `"$TargetPath\*`" /S /D" *> $null
+            Remove-Item -Recurse -Force $TargetPath -ErrorAction Stop
+            return
+        }
+        catch {
+            if ($attempt -eq 1 -and $ProcessNameHint) {
+                Get-Process -Name $ProcessNameHint -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            }
+            if ($attempt -ge $MaxAttempts) {
+                throw "Failed to remove '$TargetPath' after $MaxAttempts attempts. Close apps/explorer windows that may lock files and retry. Last error: $($_.Exception.Message)"
+            }
+            Start-Sleep -Milliseconds $DelayMs
+        }
+    }
+}
+
 if ($Clean) {
-    if (Test-Path "build\$AppName") { Remove-Item -Recurse -Force "build\$AppName" }
-    if (Test-Path "$DistDir\$AppName") { Remove-Item -Recurse -Force "$DistDir\$AppName" }
+    Remove-DirectoryWithRetry -TargetPath "build\$AppName" -ProcessNameHint $AppName
+    Remove-DirectoryWithRetry -TargetPath "$DistDir\$AppName" -ProcessNameHint $AppName
 }
 
 & $PythonExe -m pip install --upgrade pip
