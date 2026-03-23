@@ -99,9 +99,14 @@ Vortex priority note (important):
 - `Keep Highest For All Duplicates`
 11. Repeat for conflicts you care about.
 12. Click `Export Patch`.
-13. Ensure patch priority is highest so overrides win:
-- MO2: put patch mod low in left pane (after other LightPlacer JSON providers, for example after `PGPatcher`).
-- Vortex: set patch mod deployment/conflict priority above all mods that provide LightPlacer JSON.
+13. Optional: click `Light Scale` (next to `Patch Mod Name`) and enable a second post-resolution patch:
+- scale slider: `0.50` to `2.00` (`1.00` keeps current values)
+- scope: `All Entries`, `Interior Only`, or `Exterior Only`
+- optional `PortalStrict only` filter
+14. If enabled, LP Resolver exports `<Patch Mod Name>_LightIntensityPatch` after the conflict patch.
+15. Ensure patch priority is highest so overrides win:
+- MO2: place `<Patch Mod Name>_LightIntensityPatch` after `<Patch Mod Name>` and after other LightPlacer JSON providers.
+- Vortex: set both patches to highest deploy/conflict priority, with `_LightIntensityPatch` winning last.
 
 ---
 
@@ -182,6 +187,14 @@ If screenshots are not available yet, keep these image links as placeholders and
 - Includes files currently overridden by higher-priority mods.
 - Use for audit/debug, not for normal cleanup.
 
+`Light Scale` (drop-down menu)
+
+- Optional second export patch that scales intensity-like LP values after decisions are applied.
+- Slider range: `0.50` to `2.00` (`1.00` = unchanged).
+- Scope filter: `All Entries`, `Interior Only`, `Exterior Only` (uses `GetInWorldspace ... == 0/1` conditions).
+- `PortalStrict only`: additional filter on top of scope.
+- Writes to `<Patch Mod Name>_LightIntensityPatch`.
+
 ---
 
 ## 6. Conflict Types (How to Interpret)
@@ -230,7 +243,8 @@ Patch location by manager:
 
 Behavior:
 
-- Only changed source paths are written.
+- Conflict patch: only changed source paths are written.
+- Optional light-intensity patch: all effective winner source paths are written (with decisions already applied).
 - Old stale resolver overrides are removed on later exports.
 - Original mods remain untouched.
 - If `resolver_decisions.json` exists in Output Dir, it is auto-loaded after scan.

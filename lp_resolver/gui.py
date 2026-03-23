@@ -15,7 +15,7 @@ from .decisions import Decision, apply_decisions, load_decisions, make_decision,
 from .engine import ScanConfig, ScanResult, run_scan
 from .models import Conflict
 from .nif_preview import load_mesh_preview_for_nif, load_nif_bounding_radius_for_nif, load_nif_node_positions_for_nif
-from .patch_writer import write_patch_mod
+from .patch_writer import LightIntensityPatchConfig, write_light_intensity_patch_mod, write_patch_mod
 from .priority import choose_keep_highest_entry, entry_priority_sort_key
 
 try:
@@ -46,6 +46,8 @@ try:
         QTextEdit,
         QVBoxLayout,
         QWidget,
+        QWidgetAction,
+        QSlider,
     )
 except Exception as exc:  # noqa: BLE001
     raise RuntimeError(
@@ -1196,6 +1198,7 @@ class MainWindow(QMainWindow):
         self._updating_conflicts_table = False
         self._is_closing = False
         self._conflict_min_widths = [72, 64, 72, 32, 32, 72]
+        self._light_scale_menu: QMenu | None = None
 
         self._build_ui()
         self._load_persistent_paths()
@@ -1274,6 +1277,124 @@ class MainWindow(QMainWindow):
         combo.setMinimumWidth(target_width)
         combo.setMaximumWidth(target_width)
 
+    def _build_light_scale_menu(self) -> None:
+        self._light_scale_menu = QMenu(self)
+        menu_host = QWidget(self._light_scale_menu)
+        menu_layout = QVBoxLayout(menu_host)
+        menu_layout.setContentsMargins(10, 10, 10, 10)
+        menu_layout.setSpacing(6)
+
+        self.light_scale_enabled_cb = QCheckBox("Enable Separate Intensity Patch")
+        self.light_scale_enabled_cb.setToolTip(
+            "When enabled, Export Patch writes a second patch mod after conflict export.\n"
+            "That second mod scales light intensity in effective winner LP JSON files."
+        )
+        menu_layout.addWidget(self.light_scale_enabled_cb)
+
+        slider_row = QHBoxLayout()
+        slider_row.setContentsMargins(0, 0, 0, 0)
+        slider_row.setSpacing(8)
+        slider_row.addWidget(QLabel("Scale"))
+        self.light_scale_slider = QSlider(Qt.Horizontal)
+        self.light_scale_slider.setRange(50, 200)
+        self.light_scale_slider.setSingleStep(1)
+        self.light_scale_slider.setPageStep(5)
+        self.light_scale_slider.setValue(100)
+        self.light_scale_slider.setToolTip(
+            "Scale factor for intensity-like LP fields.\n"
+            "Range 0.50 to 2.00 (1.00 keeps original values)."
+        )
+        slider_row.addWidget(self.light_scale_slider, 1)
+        self.light_scale_value_label = QLabel("1.00x")
+        self.light_scale_value_label.setMinimumWidth(54)
+        slider_row.addWidget(self.light_scale_value_label)
+        menu_layout.addLayout(slider_row)
+
+        scope_row = QHBoxLayout()
+        scope_row.setContentsMargins(0, 0, 0, 0)
+        scope_row.setSpacing(8)
+        scope_row.addWidget(QLabel("Scope"))
+        self.light_scale_scope_combo = DropDownComboBox()
+        self.light_scale_scope_combo.addItem("All Entries", "all")
+        self.light_scale_scope_combo.addItem("Interior Only", "interior")
+        self.light_scale_scope_combo.addItem("Exterior Only", "exterior")
+        self.light_scale_scope_combo.setToolTip(
+            "Optional filter before scaling:\n"
+            "- All Entries: no worldspace filter\n"
+            "- Interior/Exterior: match `GetInWorldspace ... == 0/1` conditions"
+        )
+        self._mark_as_dropdown(self.light_scale_scope_combo)
+        scope_row.addWidget(self.light_scale_scope_combo, 1)
+        menu_layout.addLayout(scope_row)
+
+        self.light_scale_portal_strict_cb = QCheckBox("PortalStrict only")
+        self.light_scale_portal_strict_cb.setToolTip(
+            "Apply scaling only to LP entries detected as PortalStrict.\n"
+            "Can be combined with Interior/Exterior scope."
+        )
+        menu_layout.addWidget(self.light_scale_portal_strict_cb)
+
+        note = QLabel(
+            "Second patch name: <Patch Mod Name>_LightIntensityPatch\n"
+            "Place it after your conflict patch and other LP JSON providers."
+        )
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #4b5f7a; font-size: 12px;")
+        menu_layout.addWidget(note)
+
+        action = QWidgetAction(self._light_scale_menu)
+        action.setDefaultWidget(menu_host)
+        self._light_scale_menu.addAction(action)
+        self._light_scale_menu.setToolTipsVisible(True)
+        self._light_scale_menu.setMinimumWidth(360)
+
+        self.light_scale_enabled_cb.toggled.connect(self._on_light_scale_options_changed)
+        self.light_scale_slider.valueChanged.connect(self._on_light_scale_slider_changed)
+        self.light_scale_scope_combo.currentIndexChanged.connect(self._on_light_scale_options_changed)
+        self.light_scale_portal_strict_cb.toggled.connect(self._on_light_scale_options_changed)
+        self._set_light_scale_controls_enabled(False)
+        self._refresh_light_scale_button()
+
+    def _show_light_scale_menu(self) -> None:
+        if self._light_scale_menu is None:
+            return
+        anchor = self.light_scale_menu_btn.mapToGlobal(self.light_scale_menu_btn.rect().bottomLeft())
+        self._light_scale_menu.popup(anchor)
+
+    def _light_scale_factor(self) -> float:
+        return float(self.light_scale_slider.value()) / 100.0
+
+    def _set_light_scale_controls_enabled(self, enabled: bool) -> None:
+        self.light_scale_slider.setEnabled(enabled)
+        self.light_scale_scope_combo.setEnabled(enabled)
+        self.light_scale_portal_strict_cb.setEnabled(enabled)
+        self.light_scale_value_label.setEnabled(enabled)
+
+    def _refresh_light_scale_button(self) -> None:
+        enabled = self.light_scale_enabled_cb.isChecked()
+        factor = self._light_scale_factor()
+        self.light_scale_value_label.setText(f"{factor:.2f}x")
+        self._set_light_scale_controls_enabled(enabled)
+        if enabled:
+            self.light_scale_menu_btn.setText(f"Light Scale ({factor:.2f}x)")
+        else:
+            self.light_scale_menu_btn.setText("Light Scale")
+
+    def _on_light_scale_slider_changed(self, _value: int) -> None:
+        self._refresh_light_scale_button()
+        self._save_persistent_paths()
+
+    def _on_light_scale_options_changed(self, *_args) -> None:
+        self._refresh_light_scale_button()
+        self._save_persistent_paths()
+
+    def _light_scale_config(self) -> LightIntensityPatchConfig:
+        return LightIntensityPatchConfig(
+            scale_factor=self._light_scale_factor(),
+            worldspace_scope=str(self.light_scale_scope_combo.currentData() or "all"),
+            portal_strict_only=self.light_scale_portal_strict_cb.isChecked(),
+        )
+
     def _application_base_dir(self) -> Path:
         if getattr(sys, "frozen", False):
             return Path(sys.executable).resolve().parent
@@ -1288,6 +1409,10 @@ class MainWindow(QMainWindow):
         profile_path = settings.value("paths/profile_path", "", str).strip()
         output_dir = settings.value("paths/output_dir", "", str).strip()
         patch_name = settings.value("paths/patch_name", "", str).strip()
+        light_scale_enabled = bool(settings.value("light_scale/enabled", False, bool))
+        light_scale_slider_value = int(settings.value("light_scale/slider_value", 100, int))
+        light_scale_scope = settings.value("light_scale/scope", "all", str).strip().lower()
+        light_scale_portal_strict_only = bool(settings.value("light_scale/portal_strict_only", False, bool))
 
         if mo2_root:
             self.mo2_root_edit.setText(mo2_root)
@@ -1297,6 +1422,15 @@ class MainWindow(QMainWindow):
             self.output_dir_edit.setText(output_dir)
         if patch_name:
             self.patch_name_edit.setText(patch_name)
+        self.light_scale_enabled_cb.setChecked(light_scale_enabled)
+        self.light_scale_slider.setValue(max(50, min(200, light_scale_slider_value)))
+        scope_index = self.light_scale_scope_combo.findData(light_scale_scope)
+        if scope_index < 0:
+            scope_index = self.light_scale_scope_combo.findData("all")
+        if scope_index >= 0:
+            self.light_scale_scope_combo.setCurrentIndex(scope_index)
+        self.light_scale_portal_strict_cb.setChecked(light_scale_portal_strict_only)
+        self._refresh_light_scale_button()
 
         self._ensure_output_dir_exists(self._resolve_output_dir_text(self.output_dir_edit.text().strip()))
 
@@ -1306,6 +1440,11 @@ class MainWindow(QMainWindow):
         settings.setValue("paths/profile_path", self.profile_path_edit.text().strip())
         settings.setValue("paths/output_dir", self.output_dir_edit.text().strip())
         settings.setValue("paths/patch_name", self.patch_name_edit.text().strip())
+        if hasattr(self, "light_scale_enabled_cb"):
+            settings.setValue("light_scale/enabled", self.light_scale_enabled_cb.isChecked())
+            settings.setValue("light_scale/slider_value", int(self.light_scale_slider.value()))
+            settings.setValue("light_scale/scope", str(self.light_scale_scope_combo.currentData() or "all"))
+            settings.setValue("light_scale/portal_strict_only", self.light_scale_portal_strict_cb.isChecked())
         settings.sync()
 
     def _resolve_output_dir_text(self, output_dir_text: str) -> Path:
@@ -1452,6 +1591,13 @@ class MainWindow(QMainWindow):
             "Name of exported patch mod folder under MO2 mods/.\n"
             "Used on export, not during scan."
         )
+        self.light_scale_menu_btn = QPushButton("Light Scale")
+        self.light_scale_menu_btn.setToolTip(
+            "Configure optional post-resolution light intensity scaling.\n"
+            "This opens a compact drop-down menu with slider and filters."
+        )
+        self.light_scale_menu_btn.clicked.connect(self._show_light_scale_menu)
+        self._build_light_scale_menu()
         self.mo2_root_edit.editingFinished.connect(self._save_persistent_paths)
         self.profile_path_edit.editingFinished.connect(self._save_persistent_paths)
         self.output_dir_edit.editingFinished.connect(self._save_persistent_paths)
@@ -1535,6 +1681,8 @@ class MainWindow(QMainWindow):
             "Generate patch mod JSON from current decisions.\n"
             "Writes overrides at original LightPlacer source paths under MO2 mods/<PatchName>/\n"
             "so MO2 last-wins behavior applies.\n"
+            "If Light Scale is enabled, export also writes a second patch mod:\n"
+            "<PatchName>_LightIntensityPatch (place it after the first patch).\n"
             "For Vortex profiles, writes to the Vortex mods staging folder under <PatchName>/\n"
             "(for example E:\\modding\\vortex\\<PatchName> or E:\\modding\\vortex\\<game>\\<PatchName>).\n"
             "Vortex: ensure this patch mod has higher deployment/conflict priority than all other\n"
@@ -1582,6 +1730,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(browse_output_btn, 2, 2)
         grid.addWidget(QLabel("Patch Mod Name"), 3, 0)
         grid.addWidget(self.patch_name_edit, 3, 1)
+        grid.addWidget(self.light_scale_menu_btn, 3, 2)
         grid.addWidget(QLabel("Light Source"), 4, 0)
         grid.addWidget(self.pl_source_combo, 4, 1)
 
@@ -3612,15 +3761,6 @@ class MainWindow(QMainWindow):
         patch_name = self.patch_name_edit.text().strip() or "LP_ConflictPatch"
         try:
             result = write_patch_mod(self.scan_result, self.decisions, patch_mod_name=patch_name)
-            message = (
-                f"Patch written to:\n{result.patch_mod_dir}\n\n"
-                f"Selected NIF decisions: {result.selected_nif_count}\n"
-                f"Overridden source JSON files: {len(result.override_files)}\n"
-                f"Exported LP entries: {result.selected_entry_count}\n"
-                f"Stale overrides removed: {result.stale_removed_count}\n"
-                f"Warnings: {len(result.warnings)}"
-            )
-            QMessageBox.information(self, "Export Patch", message)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(
                 self,
@@ -3630,6 +3770,55 @@ class MainWindow(QMainWindow):
                     str(exc),
                 ),
             )
+            return
+
+        light_scale_result = None
+        if self.light_scale_enabled_cb.isChecked():
+            light_scale_patch_name = f"{patch_name}_LightIntensityPatch"
+            try:
+                light_scale_result = write_light_intensity_patch_mod(
+                    self.scan_result,
+                    self.decisions,
+                    self._light_scale_config(),
+                    patch_mod_name=light_scale_patch_name,
+                )
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(
+                    self,
+                    "Export Patch",
+                    self._format_file_io_error_message(
+                        "Conflict patch was exported, but light intensity patch export failed.\n\n"
+                        f"Conflict patch dir: {result.patch_mod_dir}",
+                        str(exc),
+                    ),
+                )
+                return
+
+        message = (
+            f"Conflict patch written to:\n{result.patch_mod_dir}\n\n"
+            f"Selected NIF decisions: {result.selected_nif_count}\n"
+            f"Overridden source JSON files: {len(result.override_files)}\n"
+            f"Exported LP entries: {result.selected_entry_count}\n"
+            f"Stale overrides removed: {result.stale_removed_count}\n"
+            f"Warnings: {len(result.warnings)}"
+        )
+        if light_scale_result is not None:
+            message += (
+                "\n\n"
+                f"Light intensity patch written to:\n{light_scale_result.patch_mod_dir}\n\n"
+                f"Scale factor: {self._light_scale_factor():.2f}\n"
+                f"Worldspace scope: {self.light_scale_scope_combo.currentData()}\n"
+                f"PortalStrict only: {self.light_scale_portal_strict_cb.isChecked()}\n"
+                f"Winner source JSON files exported: {len(light_scale_result.override_files)}\n"
+                f"Exported LP entries: {light_scale_result.exported_entry_count}\n"
+                f"Filter-matching LP entries: {light_scale_result.eligible_entry_count}\n"
+                f"LP entries with scaled values: {light_scale_result.scaled_entry_count}\n"
+                f"Numeric intensity values scaled: {light_scale_result.scaled_value_count}\n"
+                f"Stale overrides removed: {light_scale_result.stale_removed_count}\n"
+                f"Warnings: {len(light_scale_result.warnings)}\n\n"
+                "Load-order note: place this light intensity patch after the conflict patch."
+            )
+        QMessageBox.information(self, "Export Patch", message)
 
 
 def main() -> int:

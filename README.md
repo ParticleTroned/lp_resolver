@@ -20,7 +20,8 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 - `Worldspace Splits`
 - `Refinements`
 - `Overlap`
-- Lets you apply decisions per conflict and export an MO2 patch mod that uses normal last-wins override behavior.
+- Lets you apply decisions per conflict and export an MO2/Vortex patch mod that uses normal last-wins override behavior.
+- Optional post-resolution Light Scale export writes a second patch over effective winners with configurable intensity scaling (0.50-2.00, interior/exterior, PortalStrict filter).
 
 ## Why It Is Useful
 
