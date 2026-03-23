@@ -74,6 +74,7 @@ def _validate_scan_config(config: ScanConfig) -> None:
 def run_scan(config: ScanConfig, write_output_reports: bool = True) -> ScanResult:
     _validate_scan_config(config)
 
+    mo2_root_raw = config.mo2_root
     mo2_root = config.mo2_root.expanduser().resolve()
     profile_path = resolve_profile_path(mo2_root, config.profile, config.profile_path)
     source_issues: list[ParseIssue] = []
@@ -85,10 +86,14 @@ def run_scan(config: ScanConfig, write_output_reports: bool = True) -> ScanResul
         enabled_mods = read_enabled_mods(profile_path, mods_dir)
         mod_order_source = "mo2"
     elif is_vortex_profile(profile_path):
+        explicit_mods_dir = config.mods_dir
+        if explicit_mods_dir is None and mo2_root_raw != Path("."):
+            # GUI/CLI may provide Vortex staging path via MO2-root field for Vortex scans.
+            explicit_mods_dir = mo2_root_raw
         export_path = config.output_dir.expanduser().resolve() / VORTEX_EXPORT_FILENAME
         vortex_result = export_vortex_enabled_mods(
             profile_path=profile_path,
-            explicit_mods_dir=config.mods_dir,
+            explicit_mods_dir=explicit_mods_dir,
             export_path=export_path,
         )
         mods_dir = vortex_result.mods_dir

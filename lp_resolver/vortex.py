@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from heapq import heappop, heappush
@@ -14,6 +15,7 @@ from typing import Any
 from .models import ModEntry, ParseIssue
 
 VORTEX_EXPORT_FILENAME = "vortex_modlist.txt"
+_GAME_TOKEN_RE = re.compile(r"\{game\}|\$\{game\}|%game%", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -220,6 +222,115 @@ def _resolve_profile_from_state(state: dict[str, Any], profile_path: Path) -> tu
     return first_profile_id, payload
 
 
+def _normalize_identifier(value: str) -> str:
+    return "".join(ch for ch in value.strip().lower() if ch.isalnum())
+
+
+def _coerce_raw_install_path(value: Any) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, dict):
+        for key in ("path", "installPath", "value", "target"):
+            nested = value.get(key)
+            if isinstance(nested, str) and nested.strip():
+                return nested.strip()
+    return None
+
+
+def _expand_install_path_template(raw_path: str, game_id: str) -> str:
+    with_game = _GAME_TOKEN_RE.sub(game_id, raw_path)
+    return os.path.expandvars(with_game)
+
+
+def _resolve_install_base_path(raw_path: str, vortex_root: Path, game_id: str) -> Path:
+    expanded_text = _expand_install_path_template(raw_path, game_id).strip()
+    candidate = Path(expanded_text).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (vortex_root / candidate).resolve()
+
+
+def _candidate_mods_dirs(base: Path, game_id: str) -> list[Path]:
+    game = game_id.strip()
+    candidates: list[Path] = []
+
+    if game:
+        candidates.extend(
+            [
+                (base / game / "mods").resolve(),
+                (base / game).resolve(),
+                (base / "mods" / game).resolve(),
+                (base / "mods").resolve(),
+            ]
+        )
+    else:
+        candidates.append((base / "mods").resolve())
+    candidates.append(base.resolve())
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = candidate.as_posix().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(candidate)
+    return deduped
+
+
+def _state_install_path_texts(state: dict[str, Any], game_id: str) -> list[str]:
+    settings = _as_dict(state.get("settings"))
+    mods_settings = _as_dict(settings.get("mods"))
+    install_path_value = mods_settings.get("installPath")
+    normalized_game_id = _normalize_identifier(game_id)
+    raw_paths: list[str] = []
+
+    def add_raw(value: Any) -> None:
+        coerced = _coerce_raw_install_path(value)
+        if not coerced:
+            return
+        if coerced in raw_paths:
+            return
+        raw_paths.append(coerced)
+
+    if isinstance(install_path_value, str):
+        add_raw(install_path_value)
+    elif isinstance(install_path_value, dict):
+        if game_id in install_path_value:
+            add_raw(install_path_value.get(game_id))
+        if normalized_game_id:
+            for key, value in install_path_value.items():
+                if _normalize_identifier(str(key)) == normalized_game_id:
+                    add_raw(value)
+        for fallback_key in ("{game}", "${game}", "%game%", "default", "global"):
+            if fallback_key in install_path_value:
+                add_raw(install_path_value.get(fallback_key))
+        for value in install_path_value.values():
+            add_raw(value)
+
+    # Fallback keys seen in some state variants.
+    add_raw(mods_settings.get("installPathPattern"))
+    add_raw(mods_settings.get("path"))
+    add_raw(mods_settings.get("stagingPath"))
+
+    return raw_paths
+
+
+def _looks_like_vortex_root(path: Path) -> bool:
+    return path.is_dir() and (path / "temp").exists() and (
+        (path / "state.v2").exists() or (path / "profiles").exists()
+    )
+
+
+def _is_usable_mods_dir_candidate(path: Path) -> bool:
+    if not path.exists() or not path.is_dir():
+        return False
+    if _looks_like_vortex_root(path):
+        return False
+    return True
+
+
 def _resolve_mods_dir(
     *,
     state: dict[str, Any],
@@ -227,36 +338,57 @@ def _resolve_mods_dir(
     game_id: str,
     explicit_mods_dir: Path | None,
 ) -> Path:
-    if explicit_mods_dir is not None:
-        resolved = explicit_mods_dir.expanduser().resolve()
-        if not resolved.exists():
-            raise FileNotFoundError(f"Mods directory does not exist: {resolved}")
-        if not resolved.is_dir():
-            raise NotADirectoryError(f"Mods directory is not a directory: {resolved}")
-        return resolved
+    base_hints: list[tuple[str, Path]] = []
 
-    settings = _as_dict(state.get("settings"))
-    mods_settings = _as_dict(settings.get("mods"))
-    install_paths = _as_dict(mods_settings.get("installPath"))
-    raw_install_path = str(install_paths.get(game_id, "")).strip()
-    if not raw_install_path:
+    if explicit_mods_dir is not None:
+        raw_explicit = str(explicit_mods_dir).strip()
+        if raw_explicit:
+            base_hints.append(
+                ("explicit_mods_dir", _resolve_install_base_path(raw_explicit, vortex_root, game_id))
+            )
+
+    state_install_paths = _state_install_path_texts(state, game_id)
+    for index, raw_path in enumerate(state_install_paths, start=1):
+        base_hints.append(
+            (f"state.settings.mods.installPath[{index}]", _resolve_install_base_path(raw_path, vortex_root, game_id))
+        )
+
+    if game_id.strip():
+        base_hints.append(("vortex_root/<game>/mods", (vortex_root / game_id / "mods").resolve()))
+        base_hints.append(("vortex_root/<game>", (vortex_root / game_id).resolve()))
+
+    attempted_candidates: list[tuple[str, Path]] = []
+    seen_candidates: set[str] = set()
+    for source, base in base_hints:
+        for candidate in _candidate_mods_dirs(base, game_id):
+            key = candidate.as_posix().lower()
+            if key in seen_candidates:
+                continue
+            seen_candidates.add(key)
+            attempted_candidates.append((source, candidate))
+            if _is_usable_mods_dir_candidate(candidate):
+                return candidate
+
+    if not state_install_paths:
+        if explicit_mods_dir is not None:
+            attempted = "; ".join(
+                f"{source} -> {candidate}" for source, candidate in attempted_candidates[:8]
+            ) or "(none)"
+            raise FileNotFoundError(
+                "Could not resolve Vortex mods installPath from state.settings.mods.installPath, "
+                "and the provided staging/mods path hint was not usable. "
+                f"Tried: {attempted}"
+            )
         raise FileNotFoundError(
             "Could not resolve Vortex mods installPath from state.settings.mods.installPath."
         )
 
-    expanded = Path(os.path.expandvars(raw_install_path)).expanduser()
-    if not expanded.is_absolute():
-        expanded = (vortex_root / expanded).resolve()
-    else:
-        expanded = expanded.resolve()
-
-    candidates = [expanded, expanded / game_id]
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_dir():
-            return candidate
-
+    attempted = "; ".join(
+        f"{source} -> {candidate}" for source, candidate in attempted_candidates[:8]
+    ) or "(none)"
     raise FileNotFoundError(
-        f"Resolved Vortex mods directory does not exist: {expanded} (also checked {expanded / game_id})"
+        "Resolved Vortex mods directory does not exist or is not usable. "
+        f"gameId='{game_id}'. Tried: {attempted}"
     )
 
 
