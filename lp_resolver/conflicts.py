@@ -5,10 +5,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from math import dist, isfinite
+from math import dist
 import re
 from typing import Any
 
+from .anchors import estimate_entry_radius_units, extract_lp_anchor_nodes, extract_lp_anchor_points, iter_lights_lists as _iter_lights_lists
 from .models import Conflict, LightPlacerEntry, ParticleLightTarget
 from .normalize import value_signature
 
@@ -17,80 +18,6 @@ _WORLDSPACE_COND_RE = re.compile(
     r"getinworldspace\s+([a-z0-9_]+)\s+none\s*==\s*([01])",
     re.IGNORECASE,
 )
-_LP_POINT_KEY_HINTS = ("point", "points", "offset", "position", "pos", "anchor", "location", "coord")
-_LP_NODE_KEY_HINTS = ("node", "nodes")
-
-
-def _norm_node_name(value: str) -> str:
-    return value.strip().lower()
-
-
-def _as_xyz(value: Any) -> tuple[float, float, float] | None:
-    if not isinstance(value, (list, tuple)) or len(value) < 3:
-        return None
-    try:
-        return (float(value[0]), float(value[1]), float(value[2]))
-    except (TypeError, ValueError):
-        return None
-
-
-def _as_xyz_mapping(value: Any) -> tuple[float, float, float] | None:
-    if not isinstance(value, dict):
-        return None
-    x = value.get("x", value.get("X"))
-    y = value.get("y", value.get("Y"))
-    z = value.get("z", value.get("Z"))
-    if x is None or y is None or z is None:
-        return None
-    try:
-        return (float(x), float(y), float(z))
-    except (TypeError, ValueError):
-        return None
-
-
-def _iter_lights_lists(value: Any):
-    if isinstance(value, dict):
-        for key, child in value.items():
-            key_l = str(key).lower()
-            if key_l in {"lights", "light"}:
-                if isinstance(child, list):
-                    yield child
-                elif isinstance(child, dict):
-                    yield [child]
-            yield from _iter_lights_lists(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _iter_lights_lists(child)
-
-
-def _extract_nodes(value: Any) -> set[str]:
-    nodes: set[str] = set()
-    if isinstance(value, str):
-        if value.strip():
-            nodes.add(_norm_node_name(value))
-        return nodes
-    if not isinstance(value, list):
-        return nodes
-    for item in value:
-        if isinstance(item, str) and item.strip():
-            nodes.add(_norm_node_name(item))
-    return nodes
-
-
-def _extract_points_from_value(value: Any) -> list[tuple[float, float, float]]:
-    points: list[tuple[float, float, float]] = []
-    mapping_point = _as_xyz_mapping(value)
-    if mapping_point is not None:
-        points.append(mapping_point)
-        return points
-    if isinstance(value, list):
-        single = _as_xyz(value)
-        if single is not None:
-            points.append(single)
-        else:
-            for item in value:
-                points.extend(_extract_points_from_value(item))
-    return points
 
 
 @dataclass
@@ -112,87 +39,11 @@ def _extract_conditions(value: Any) -> list[str]:
     return conditions
 
 
-def _to_positive_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not isfinite(number):
-        return None
-    if number <= 0.0:
-        return None
-    return number
-
-
-def _estimate_entry_radius_units(settings: dict[str, Any]) -> float | None:
-    radii: list[float] = []
-
-    def _walk(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                key_l = str(key).lower()
-                if key_l == "radius":
-                    radius = _to_positive_float(child)
-                    if radius is not None:
-                        radii.append(radius)
-                elif key_l == "size":
-                    size = _to_positive_float(child)
-                    if size is not None:
-                        radii.append(size * 12.0)
-                _walk(child)
-            return
-        if isinstance(value, list):
-            for child in value:
-                _walk(child)
-
-    _walk(settings)
-    if not radii:
-        return None
-    return sum(radii) / len(radii)
-
-
 def _extract_placement_signature(settings: dict[str, Any]) -> _PlacementSignature:
-    nodes: set[str] = set()
-    points: list[tuple[float, float, float]] = []
-
-    for lights in _iter_lights_lists(settings):
-        for light in lights:
-            if not isinstance(light, dict):
-                continue
-
-            nodes |= _extract_nodes(light.get("nodes"))
-            nodes |= _extract_nodes(light.get("node"))
-
-            points.extend(_extract_points_from_value(light.get("points")))
-            points.extend(_extract_points_from_value(light.get("point")))
-
-            data = light.get("data")
-            if isinstance(data, dict):
-                points.extend(_extract_points_from_value(data.get("offset")))
-                points.extend(_extract_points_from_value(data.get("position")))
-                points.extend(_extract_points_from_value(data.get("pos")))
-
-    # Fallback for non-standard LP schemas where anchors are outside lights[].
-    def _walk(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                key_l = str(key).lower()
-                if any(hint in key_l for hint in _LP_POINT_KEY_HINTS):
-                    points.extend(_extract_points_from_value(child))
-                if any(hint in key_l for hint in _LP_NODE_KEY_HINTS):
-                    nodes.update(_extract_nodes(child))
-                _walk(child)
-            return
-        if isinstance(value, list):
-            for child in value:
-                _walk(child)
-
-    _walk(settings)
-
     return _PlacementSignature(
-        nodes=nodes,
-        points=points,
-        radius_units=_estimate_entry_radius_units(settings),
+        nodes=extract_lp_anchor_nodes(settings),
+        points=extract_lp_anchor_points(settings),
+        radius_units=estimate_entry_radius_units(settings),
     )
 
 

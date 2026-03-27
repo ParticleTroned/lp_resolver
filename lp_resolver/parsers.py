@@ -361,11 +361,12 @@ class LightPlacerAdapter:
         if likely_lp_path and not entries:
             if root_has_lp_hints:
                 message = (
-                    "No extractable LP targets found (expected NIF path fields, formID/formIDs keys, "
-                    "or effect target keys such as visualEffects/effectShaders/magicEffects)."
+                    "No extractable LP targets found. Supported LP target key families are "
+                    "NIF path fields (nif/mesh/model/path/file), FormID fields (formID/formIDs), "
+                    "and effect-ID fields (visualEffects/effectShaders/magicEffects/artObjects/mgef)."
                 )
             else:
-                message = "No Light Placer-like keys found in JSON payload."
+                message = "No Light Placer-like keys found in JSON payload (missing lights/points/data-like structure)."
             issues.append(
                 ParseIssue(
                     severity="info",

@@ -15,6 +15,8 @@ def _target_type_label(target_key: str) -> str:
     key = str(target_key).strip().lower()
     if key.startswith("formid:"):
         return "formid"
+    if key.startswith("effectid:"):
+        return "effectid"
     if key.endswith(".nif"):
         return "nif"
     return "other"
@@ -103,6 +105,9 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
     formid_conflicts = sum(
         1 for conflict in conflicts if _target_type_label(conflict.get("nif_path_canonical", "")) == "formid"
     )
+    effectid_conflicts = sum(
+        1 for conflict in conflicts if _target_type_label(conflict.get("nif_path_canonical", "")) == "effectid"
+    )
     lines: list[str] = [
         "# Light Placer Conflict Report",
         "",
@@ -128,6 +133,10 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
             "- FormID preview mode uses LP JSON local points/radius only; no mesh path is available from LP JSON."
         )
         lines.append("- LP-vs-PL overlap still requires a shared NIF target key.")
+    if effectid_conflicts > 0:
+        lines.append(f"- EffectID-keyed conflicts: {effectid_conflicts}")
+        lines.append("- EffectID targets come from LP fields like visualEffects/effectShaders/magicEffects.")
+        lines.append("- EffectID conflicts are LP-vs-LP duplicate checks; LP-vs-PL overlap still requires NIF keys.")
     synthetic_modlist_path = payload.get("synthetic_modlist_path")
     if synthetic_modlist_path:
         lines.append(f"- Synthetic Vortex modlist: `{synthetic_modlist_path}`")
@@ -160,6 +169,8 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
             )
             if target_type == "formid":
                 lines.append("- Preview note: local LP XYZ/radius only; mesh-based preview is unavailable.")
+            if target_type == "effectid":
+                lines.append("- Preview note: effect-ID target (no NIF mesh or FormID world transform preview).")
             if conflict["lp_entries"]:
                 lines.append("- LP entries:")
                 for entry in conflict["lp_entries"]:

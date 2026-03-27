@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import configparser
 import math
+import os
 import struct
 import zlib
 from dataclasses import dataclass
@@ -17,6 +19,12 @@ from .vortex import export_vortex_enabled_mods, is_vortex_profile
 _PLUGIN_SUFFIXES = (".esm", ".esp", ".esl")
 _COMPRESSED_RECORD_FLAG = 0x00040000
 _MODEL_SUBRECORDS = ("MODL", "MOD2", "MOD3", "MOD4", "MOD5")
+_GAME_DATA_ENV_VARS = (
+    "LPRESOLVER_GAME_DATA_DIR",
+    "SKYRIM_DATA_DIR",
+    "SKYRIMSE_DATA_DIR",
+    "SKYRIM_SPECIAL_EDITION_DATA",
+)
 
 
 @dataclass(frozen=True)
@@ -371,36 +379,184 @@ def _enabled_mod_entries(profile_path: str, mods_dir: str):
     return _EnabledModsResolution(entries=tuple(), issue=None)
 
 
+def _normalize_data_dir_candidate(path: Path) -> Path | None:
+    try:
+        candidate = path.expanduser().resolve()
+    except OSError:
+        return None
+    if candidate.is_dir():
+        if candidate.name.lower() == "data":
+            return candidate
+        data_subdir = candidate / "Data"
+        if data_subdir.exists() and data_subdir.is_dir():
+            return data_subdir.resolve()
+    return None
+
+
+def _decode_mo2_path_value(value: str) -> str:
+    text = value.strip().strip('"')
+    marker = "@bytearray("
+    if text.lower().startswith(marker) and text.endswith(")"):
+        text = text[len(marker):-1].strip()
+    return text.strip().strip('"')
+
+
+def _iter_env_game_data_dirs():
+    for key in _GAME_DATA_ENV_VARS:
+        raw = os.environ.get(key, "").strip()
+        if not raw:
+            continue
+        for chunk in raw.split(os.pathsep):
+            text = chunk.strip().strip('"')
+            if not text:
+                continue
+            normalized = _normalize_data_dir_candidate(Path(text))
+            if normalized is not None:
+                yield normalized
+
+
+def _iter_mo2_game_data_dirs(mods_dir: Path):
+    ini_candidates = [
+        mods_dir.parent / "ModOrganizer.ini",
+        mods_dir / "ModOrganizer.ini",
+    ]
+    for ini_path in ini_candidates:
+        if not ini_path.exists() or not ini_path.is_file():
+            continue
+        parser = configparser.ConfigParser()
+        try:
+            parser.read(ini_path, encoding="utf-8")
+        except Exception:
+            continue
+        if not parser.has_section("General"):
+            continue
+        game_path_raw = parser.get("General", "gamePath", fallback="").strip()
+        if not game_path_raw:
+            game_path_raw = parser.get("General", "game_path", fallback="").strip()
+        if not game_path_raw:
+            continue
+        decoded = _decode_mo2_path_value(game_path_raw)
+        if not decoded:
+            continue
+        path = Path(decoded)
+        if not path.is_absolute():
+            path = (ini_path.parent / path).resolve()
+        normalized = _normalize_data_dir_candidate(path)
+        if normalized is not None:
+            yield normalized
+
+
+def _iter_nearby_data_dirs(profile_path: Path, mods_dir: Path):
+    seeds: list[Path] = [
+        mods_dir,
+        mods_dir.parent,
+        mods_dir.parent.parent,
+        profile_path,
+        profile_path.parent,
+        profile_path.parent.parent,
+    ]
+    for seed in seeds:
+        normalized = _normalize_data_dir_candidate(seed)
+        if normalized is not None:
+            yield normalized
+        normalized_data = _normalize_data_dir_candidate(seed / "Data")
+        if normalized_data is not None:
+            yield normalized_data
+
+
 def _iter_common_game_data_dirs():
     candidates = [
+        # Windows common Steam defaults.
         Path(r"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data"),
         Path(r"C:\Program Files\Steam\steamapps\common\Skyrim Special Edition\Data"),
         Path(r"C:\Steam\steamapps\common\Skyrim Special Edition\Data"),
+        # Linux/SteamOS common defaults.
+        Path("~/.steam/steam/steamapps/common/Skyrim Special Edition/Data"),
+        Path("~/.local/share/Steam/steamapps/common/Skyrim Special Edition/Data"),
     ]
     for path in candidates:
-        if path.exists() and path.is_dir():
-            yield path
+        normalized = _normalize_data_dir_candidate(path)
+        if normalized is not None:
+            yield normalized
+
+
+@lru_cache(maxsize=32)
+def _candidate_game_data_dirs(profile_path: str, mods_dir: str) -> tuple[str, ...]:
+    profile = Path(profile_path)
+    mods = Path(mods_dir)
+    resolved: list[str] = []
+    seen: set[str] = set()
+
+    for candidate in (
+        *list(_iter_env_game_data_dirs()),
+        *list(_iter_mo2_game_data_dirs(mods)),
+        *list(_iter_nearby_data_dirs(profile, mods)),
+        *list(_iter_common_game_data_dirs()),
+    ):
+        key = str(candidate).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        resolved.append(str(candidate))
+    return tuple(resolved)
+
+
+@lru_cache(maxsize=1024)
+def _indexed_dir_files(directory_path: str, mtime_ns: int) -> tuple[tuple[str, str], ...]:
+    _ = mtime_ns
+    directory = Path(directory_path)
+    mapping: dict[str, str] = {}
+    try:
+        for child in directory.iterdir():
+            if not child.is_file():
+                continue
+            lowered = child.name.lower()
+            if lowered not in mapping:
+                mapping[lowered] = str(child.resolve())
+    except OSError:
+        return tuple()
+    return tuple(sorted(mapping.items()))
+
+
+def _resolve_file_case_insensitive(root: Path, filename: str) -> Path | None:
+    candidate = root / filename
+    if candidate.exists() and candidate.is_file():
+        return candidate.resolve()
+
+    try:
+        stat = root.stat()
+    except OSError:
+        return None
+    if not root.exists() or not root.is_dir():
+        return None
+
+    indexed = dict(_indexed_dir_files(str(root.resolve()), stat.st_mtime_ns))
+    matched = indexed.get(filename.lower())
+    if not matched:
+        return None
+    path = Path(matched)
+    return path if path.exists() else None
+
+
+def _find_plugin_file_in_root(root: Path, plugin_name: str) -> Path | None:
+    for filename in (plugin_name, f"{plugin_name}.ghost"):
+        if matched := _resolve_file_case_insensitive(root, filename):
+            return matched
+    return None
 
 
 def _resolve_plugin_file(
     plugin_name: str,
     enabled_mods: tuple,
+    data_dirs: tuple[str, ...],
 ) -> Path | None:
     for mod in enabled_mods:
         for root in (mod.path, mod.path / "Data"):
-            candidate = root / plugin_name
-            if candidate.exists() and candidate.is_file():
-                return candidate.resolve()
-            ghost = root / f"{plugin_name}.ghost"
-            if ghost.exists() and ghost.is_file():
-                return ghost.resolve()
-    for data_dir in _iter_common_game_data_dirs():
-        candidate = data_dir / plugin_name
-        if candidate.exists() and candidate.is_file():
-            return candidate.resolve()
-        ghost = data_dir / f"{plugin_name}.ghost"
-        if ghost.exists() and ghost.is_file():
-            return ghost.resolve()
+            if match := _find_plugin_file_in_root(root, plugin_name):
+                return match
+    for raw_data_dir in data_dirs:
+        if match := _find_plugin_file_in_root(Path(raw_data_dir), plugin_name):
+            return match
     return None
 
 
@@ -411,17 +567,38 @@ def _active_plugin_sources_with_issue(profile_path: str, mods_dir: str) -> tuple
         return (tuple(), "No plugins found in plugins.txt/loadorder.txt.")
     mods_resolution = _enabled_mod_entries(profile_path, mods_dir)
     enabled_mods = mods_resolution.entries
+    data_dirs = _candidate_game_data_dirs(profile_path, mods_dir)
     resolved: list[tuple[str, str]] = []
+    missing: list[str] = []
     for plugin_name in plugin_order:
-        plugin_path = _resolve_plugin_file(plugin_name, enabled_mods)
+        plugin_path = _resolve_plugin_file(plugin_name, enabled_mods, data_dirs)
         if plugin_path is None:
+            missing.append(plugin_name)
             continue
         resolved.append((plugin_name, str(plugin_path)))
-    if not resolved and mods_resolution.issue:
-        return (tuple(), mods_resolution.issue)
+    issue_parts: list[str] = []
     if mods_resolution.issue:
-        return (tuple(resolved), f"{mods_resolution.issue} (continuing with fallback plugin path resolution)")
+        issue_parts.append(mods_resolution.issue)
+    if missing:
+        preview = ", ".join(missing[:6])
+        suffix = "" if len(missing) <= 6 else f", +{len(missing) - 6} more"
+        issue_parts.append(
+            f"Missing plugin files: {len(missing)} not resolved from enabled mods or discovered Data directories ({preview}{suffix})."
+        )
+    if not resolved and issue_parts:
+        return (tuple(), " ".join(issue_parts))
+    if issue_parts:
+        return (tuple(resolved), " ".join(issue_parts))
     return (tuple(resolved), None)
+
+
+def clear_formid_preview_caches() -> None:
+    _find_record_in_plugin_cached.cache_clear()
+    _active_plugin_order.cache_clear()
+    _enabled_mod_entries.cache_clear()
+    _candidate_game_data_dirs.cache_clear()
+    _indexed_dir_files.cache_clear()
+    _active_plugin_sources_with_issue.cache_clear()
 
 
 def _resolve_winning_record(
@@ -476,7 +653,11 @@ def resolve_formid_world_resolution(
     if not plugin_sources:
         return FormIDWorldResolution(
             status="no_active_plugins",
-            detail=f"No active plugin load order could be resolved from profile.{source_issue_suffix}",
+            detail=(
+                "No active plugin load order could be resolved from profile plugins.txt/loadorder.txt. "
+                "If base-game plugins are not discoverable, set LPRESOLVER_GAME_DATA_DIR to the game's Data folder."
+                f"{source_issue_suffix}"
+            ),
             context=None,
         )
 
@@ -484,7 +665,12 @@ def resolve_formid_world_resolution(
     if reference is None:
         return FormIDWorldResolution(
             status="reference_not_found",
-            detail=f"Winning REFR/ACHR record not found in active plugin order.{source_issue_suffix}",
+            detail=(
+                "Winning REFR/ACHR record for this FormID was not found in active plugin order. "
+                "Using LP local preview only (entries may represent different placed instances)."
+                " If base-game plugins are not discoverable, set LPRESOLVER_GAME_DATA_DIR to the game's Data folder."
+                f"{source_issue_suffix}"
+            ),
             context=None,
         )
     if reference.position is None or reference.rotation_deg is None:

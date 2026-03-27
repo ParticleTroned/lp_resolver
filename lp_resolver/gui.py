@@ -11,9 +11,23 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .anchors import (
+    dedupe_points as _dedupe_points,
+    estimate_entry_radius_units as _estimate_entry_radius_units,
+    extract_lp_anchor_nodes as _extract_lp_anchor_nodes,
+    extract_lp_anchor_points as _extract_lp_anchor_points,
+    iter_lights_lists as _iter_lights_lists,
+    sanitize_points as _sanitize_points,
+    to_positive_float as _to_positive_float,
+)
 from .decisions import Decision, apply_decisions, load_decisions, make_decision, save_decisions
 from .engine import ScanConfig, ScanResult, run_scan
-from .formid_preview import FormIDWorldResolution, resolve_formid_world_resolution, transform_local_points_to_world
+from .formid_preview import (
+    FormIDWorldResolution,
+    clear_formid_preview_caches,
+    resolve_formid_world_resolution,
+    transform_local_points_to_world,
+)
 from .models import Conflict
 from .nif_preview import load_mesh_preview_for_nif, load_nif_bounding_radius_for_nif, load_nif_node_positions_for_nif
 from .patch_writer import LightIntensityPatchConfig, write_light_intensity_patch_mod, write_patch_mod
@@ -216,100 +230,12 @@ def _extract_points_from_value(value: Any) -> list[tuple[float, float, float]]:
     return points
 
 
-def _iter_lights_lists(value: Any):
-    if isinstance(value, dict):
-        for key, child in value.items():
-            key_l = str(key).lower()
-            if key_l in {"lights", "light"}:
-                if isinstance(child, list):
-                    yield child
-                elif isinstance(child, dict):
-                    yield [child]
-            yield from _iter_lights_lists(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _iter_lights_lists(child)
-
-
-_LP_POINT_KEY_HINTS = ("point", "points", "offset", "position", "pos", "anchor", "location", "coord")
-_LP_NODE_KEY_HINTS = ("node", "nodes")
-
-
 def _is_formid_target(value: str) -> bool:
     return value.strip().lower().startswith("formid:")
 
 
 def _is_nif_target(value: str) -> bool:
     return value.strip().lower().endswith(".nif")
-
-
-def _extract_lp_anchor_points(settings: dict[str, Any]) -> list[tuple[float, float, float]]:
-    points: list[tuple[float, float, float]] = []
-    for lights in _iter_lights_lists(settings):
-        for light in lights:
-            if not isinstance(light, dict):
-                continue
-            points.extend(_extract_points_from_value(light.get("points")))
-            points.extend(_extract_points_from_value(light.get("point")))
-            data = light.get("data")
-            if isinstance(data, dict):
-                points.extend(_extract_points_from_value(data.get("offset")))
-
-    # Fallback for non-standard LP schemas where anchors are not under lights[].
-    def _walk(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                key_l = str(key).lower()
-                if any(hint in key_l for hint in _LP_POINT_KEY_HINTS):
-                    points.extend(_extract_points_from_value(child))
-                _walk(child)
-            return
-        if isinstance(value, list):
-            for child in value:
-                _walk(child)
-
-    _walk(settings)
-    return _dedupe_points(_sanitize_points(points))
-
-
-def _extract_lp_anchor_nodes(settings: dict[str, Any]) -> set[str]:
-    nodes: set[str] = set()
-
-    def _add_nodes(raw_nodes: Any) -> None:
-        if isinstance(raw_nodes, str):
-            text = raw_nodes.strip().lower()
-            if text:
-                nodes.add(text)
-            return
-        if isinstance(raw_nodes, list):
-            for node in raw_nodes:
-                if isinstance(node, str):
-                    text = node.strip().lower()
-                    if text:
-                        nodes.add(text)
-
-    for lights in _iter_lights_lists(settings):
-        for light in lights:
-            if not isinstance(light, dict):
-                continue
-            _add_nodes(light.get("nodes"))
-            _add_nodes(light.get("node"))
-
-    # Fallback for non-standard LP schemas where nodes are outside lights[].
-    def _walk(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                key_l = str(key).lower()
-                if any(hint in key_l for hint in _LP_NODE_KEY_HINTS):
-                    _add_nodes(child)
-                _walk(child)
-            return
-        if isinstance(value, list):
-            for child in value:
-                _walk(child)
-
-    _walk(settings)
-    return nodes
 
 
 def _normalized_node_lookup_key(value: str) -> str:
@@ -337,51 +263,6 @@ def _node_lookup_aliases(value: str) -> set[str]:
     if token:
         aliases.add("".join(token))
     return aliases
-
-
-def _to_positive_float(value: Any) -> float | None:
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not isfinite(number):
-        return None
-    if number <= 0.0:
-        return None
-    return number
-
-
-def _estimate_entry_radius_units(settings: dict[str, Any]) -> float | None:
-    """
-    Best-effort LP light radius estimate in mesh units.
-    - Prefers explicit `radius` keys
-    - Falls back to inverse-square style `size`
-    """
-    radii: list[float] = []
-
-    def _walk(value: Any) -> None:
-        if isinstance(value, dict):
-            for key, child in value.items():
-                key_l = str(key).lower()
-                if key_l == "radius":
-                    radius = _to_positive_float(child)
-                    if radius is not None:
-                        radii.append(radius)
-                elif key_l == "size":
-                    size = _to_positive_float(child)
-                    if size is not None:
-                        # Convert ISL "size" to an approximate radius scale for preview purposes.
-                        radii.append(size * 12.0)
-                _walk(child)
-            return
-        if isinstance(value, list):
-            for child in value:
-                _walk(child)
-
-    _walk(settings)
-    if not radii:
-        return None
-    return sum(radii) / len(radii)
 
 
 def _compact_value_text(value: Any, max_len: int = 120) -> str:
@@ -458,31 +339,6 @@ def _extract_lp_light_value_summaries(settings: dict[str, Any]) -> list[str]:
 
 _PL_POINT_KEY_HINTS = ("point", "points", "offset", "position", "pos", "anchor", "location", "coord")
 _PL_NODE_KEY_HINTS = ("node", "nodes")
-
-
-def _dedupe_points(points: list[tuple[float, float, float]]) -> list[tuple[float, float, float]]:
-    result: list[tuple[float, float, float]] = []
-    seen: set[tuple[float, float, float]] = set()
-    for point in points:
-        key = (round(point[0], 4), round(point[1], 4), round(point[2], 4))
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(point)
-    return result
-
-
-def _is_finite_point(point: tuple[float, float, float]) -> bool:
-    return isfinite(point[0]) and isfinite(point[1]) and isfinite(point[2])
-
-
-def _sanitize_points(points: list[tuple[float, float, float]]) -> list[tuple[float, float, float]]:
-    cleaned: list[tuple[float, float, float]] = []
-    for point in points:
-        if _is_finite_point(point):
-            cleaned.append((float(point[0]), float(point[1]), float(point[2])))
-    return cleaned
-
 
 def _extract_pl_anchor_points(payload: dict[str, Any]) -> list[tuple[float, float, float]]:
     points: list[tuple[float, float, float]] = []
@@ -2144,6 +2000,7 @@ class MainWindow(QMainWindow):
             return
         self._active_scan_id += 1
         scan_id = self._active_scan_id
+        clear_formid_preview_caches()
         self._scan_in_progress = True
         self.scan_btn.setEnabled(False)
         self.scan_result = None
@@ -3580,11 +3437,13 @@ class MainWindow(QMainWindow):
                     return (
                         f"Uncertain (local-only FormID): {overlapping_pairs}/{pairs_with_points} LP entry pairs overlap "
                         f"in local coordinates (fixed<= {threshold:.1f} or radius-aware). "
-                        "World placement could not be resolved from winning REFR/ACHR records."
+                        "World placement could not be resolved from winning REFR/ACHR records. "
+                        "Same-JSON LP entries are still treated as separate placements."
                     )
                 return (
                     f"Uncertain (local-only FormID): 0/{pairs_with_points} LP entry pairs overlap in local coordinates. "
-                    "World placement could not be resolved from winning REFR/ACHR records."
+                    "World placement could not be resolved from winning REFR/ACHR records. "
+                    "Same-JSON LP entries are still treated as separate placements."
                 )
             if overlapping_pairs > 0:
                 criteria_hits: list[str] = []
@@ -3762,6 +3621,7 @@ class MainWindow(QMainWindow):
                 lines.append("FormID local preview mode:")
                 lines.append("- using LP JSON local points/radius only")
                 lines.append("- mesh information is not available in LP JSON")
+            lines.append("- same-source LP JSON entries are additive unless conditions make them mutually exclusive")
             if suppress_points:
                 lines.append("- XYZ drawing disabled because LP entries map to different FormID targets in this group")
             lines.append("")

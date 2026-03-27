@@ -27,8 +27,9 @@ If you still test the Windows `.exe` under Proton, set `Start in` to the app fol
 
 The resolver scans your active MO2 or Vortex profile and finds lighting conflicts:
 
-- LP vs LP duplicates (same target key targeted more than once: NIF or FormID)
+- LP vs LP duplicates (same target key targeted more than once: NIF, FormID, or EffectID)
 - LP vs PL overlaps (Light Placer + ENB Particle Lights on same NIF)
+- LP target key families: NIF paths, FormID keys, and effect IDs (for example `visualEffects`, `effectShaders`, `magicEffects`, `artObjects`, `mgef`)
 
 Then it lets you choose which LP entries should stay (single or multiple) and exports an override patch mod.
 
@@ -37,6 +38,7 @@ Important:
 - Source mods are not edited.
 - The patch works by writing JSON files at the same virtual `LightPlacer/...` paths.
 - Effective winner is controlled by your mod manager priority/deployment order (MO2 or Vortex).
+- Entries from the same LP JSON file are treated as separate additive placements unless conditions make them mutually exclusive.
 
 ---
 
@@ -150,6 +152,7 @@ FormID-targeted LP notes:
 - If LP entries share the same FormID and include numeric `points`/`point` data, preview uses those local XYZ values plus radius estimates.
 - For FormID targets, LP JSON does not provide mesh path data, so mesh silhouette preview is unavailable.
 - For node-only FormID entries (or mixed FormID targets in one group), XYZ drawing is intentionally suppressed and shown as unavailable.
+- If you see `FormID world preview: reference_not_found`, no winning REFR/ACHR transform was resolved from active plugins, so overlap stays local-only and may represent different placed instances.
 
 ![Anchor Preview](images/manual-anchor-preview.PNG)
 
@@ -192,6 +195,16 @@ If screenshots are not available yet, keep these image links as placeholders and
 
 - Includes files currently overridden by higher-priority mods.
 - Use for audit/debug, not for normal cleanup.
+
+`FormID LP Preview`
+
+- ON (default): tries to resolve winning REFR/ACHR world transform and shows world-space FormID preview when possible.
+- OFF: keeps FormID preview in LP-local coordinates only.
+
+`Hide unresolved FormID local-only duplicates`
+
+- ON (default): hides duplicate-only FormID conflicts when world transform cannot be resolved.
+- Use OFF when auditing uncertain local-only entries manually.
 
 `Light Scale` (drop-down menu)
 
@@ -306,3 +319,26 @@ To revert fully:
 Tip:
 
 - Start with a small subset (for example only `Overlap` conflicts), test in game, then continue.
+
+---
+
+## 10. Common Parse/Preview Messages
+
+`No extractable LP targets found`
+
+- The JSON looked LP-like, but no supported target keys were found.
+- Supported target key families are:
+- NIF path fields (`nif`, `mesh`, `model`, `path`, `file`)
+- FormID fields (`formID`, `formIDs`, variants)
+- Effect-ID fields (`visualEffects`, `effectShaders`, `magicEffects`, `artObjects`, `mgef`)
+
+`FormID world preview: reference_not_found`
+
+- The resolver did not find a winning REFR/ACHR record for that FormID in active plugin order.
+- Preview falls back to LP-local points/radius only; treat overlap results as uncertain.
+- If your game Data folder is not auto-detected, set `LPRESOLVER_GAME_DATA_DIR` to that folder path before launching the app.
+
+`Uncertain (local-only FormID)`
+
+- World transform was not resolved, so overlap is based on LP-local coordinates only.
+- Even if entries come from the same JSON file, they can still map to different world placements.
