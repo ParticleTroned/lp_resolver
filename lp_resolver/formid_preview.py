@@ -50,6 +50,12 @@ class _RecordMatch:
     model_path: str | None = None
 
 
+@dataclass(frozen=True)
+class _EnabledModsResolution:
+    entries: tuple
+    issue: str | None = None
+
+
 def _normalize_plugin_name(value: str) -> str:
     text = value.strip().replace("\\", "/").split("/")[-1]
     if text.lower().endswith(".ghost"):
@@ -341,21 +347,28 @@ def _active_plugin_order(profile_path: str) -> tuple[str, ...]:
 def _enabled_mod_entries(profile_path: str, mods_dir: str):
     profile = Path(profile_path)
     mods = Path(mods_dir)
-    try:
-        if (profile / "modlist.txt").exists():
+    if (profile / "modlist.txt").exists():
+        try:
             entries = read_enabled_mods(profile, mods)
-        elif is_vortex_profile(profile):
+        except Exception as exc:  # noqa: BLE001
+            return _EnabledModsResolution(entries=tuple(), issue=f"MO2 modlist parse failed: {exc}")
+        sorted_entries = tuple(sorted(entries, key=lambda item: (item.priority, item.name.lower()), reverse=True))
+        return _EnabledModsResolution(entries=sorted_entries, issue=None)
+
+    if is_vortex_profile(profile):
+        try:
             entries = export_vortex_enabled_mods(
                 profile_path=profile,
                 explicit_mods_dir=mods,
                 export_path=profile / "vortex_modlist.txt",
                 write_export_file=False,
             ).entries
-        else:
-            entries = []
-    except Exception:
-        entries = []
-    return tuple(sorted(entries, key=lambda item: (item.priority, item.name.lower()), reverse=True))
+        except Exception as exc:  # noqa: BLE001
+            return _EnabledModsResolution(entries=tuple(), issue=f"Vortex state parse failed: {exc}")
+        sorted_entries = tuple(sorted(entries, key=lambda item: (item.priority, item.name.lower()), reverse=True))
+        return _EnabledModsResolution(entries=sorted_entries, issue=None)
+
+    return _EnabledModsResolution(entries=tuple(), issue=None)
 
 
 def _iter_common_game_data_dirs():
@@ -392,18 +405,23 @@ def _resolve_plugin_file(
 
 
 @lru_cache(maxsize=8)
-def _active_plugin_sources(profile_path: str, mods_dir: str) -> tuple[tuple[str, str], ...]:
+def _active_plugin_sources_with_issue(profile_path: str, mods_dir: str) -> tuple[tuple[tuple[str, str], ...], str | None]:
     plugin_order = _active_plugin_order(profile_path)
     if not plugin_order:
-        return tuple()
-    enabled_mods = _enabled_mod_entries(profile_path, mods_dir)
+        return (tuple(), "No plugins found in plugins.txt/loadorder.txt.")
+    mods_resolution = _enabled_mod_entries(profile_path, mods_dir)
+    enabled_mods = mods_resolution.entries
     resolved: list[tuple[str, str]] = []
     for plugin_name in plugin_order:
         plugin_path = _resolve_plugin_file(plugin_name, enabled_mods)
         if plugin_path is None:
             continue
         resolved.append((plugin_name, str(plugin_path)))
-    return tuple(resolved)
+    if not resolved and mods_resolution.issue:
+        return (tuple(), mods_resolution.issue)
+    if mods_resolution.issue:
+        return (tuple(resolved), f"{mods_resolution.issue} (continuing with fallback plugin path resolution)")
+    return (tuple(resolved), None)
 
 
 def _resolve_winning_record(
@@ -453,11 +471,12 @@ def resolve_formid_world_resolution(
             context=None,
         )
 
-    plugin_sources = _active_plugin_sources(profile_path, mods_dir)
+    plugin_sources, source_issue = _active_plugin_sources_with_issue(profile_path, mods_dir)
+    source_issue_suffix = f" Source warning: {source_issue}" if source_issue else ""
     if not plugin_sources:
         return FormIDWorldResolution(
             status="no_active_plugins",
-            detail="No active plugin load order could be resolved from profile.",
+            detail=f"No active plugin load order could be resolved from profile.{source_issue_suffix}",
             context=None,
         )
 
@@ -465,13 +484,13 @@ def resolve_formid_world_resolution(
     if reference is None:
         return FormIDWorldResolution(
             status="reference_not_found",
-            detail="Winning REFR/ACHR record not found in active plugin order.",
+            detail=f"Winning REFR/ACHR record not found in active plugin order.{source_issue_suffix}",
             context=None,
         )
     if reference.position is None or reference.rotation_deg is None:
         return FormIDWorldResolution(
             status="reference_missing_data",
-            detail=f"Winning {reference.record_type} record is missing DATA position/rotation fields.",
+            detail=f"Winning {reference.record_type} record is missing DATA position/rotation fields.{source_issue_suffix}",
             context=None,
         )
 
@@ -508,6 +527,8 @@ def resolve_formid_world_resolution(
         detail_parts.append(f"model={context.base_model_path}")
     else:
         detail_parts.append("model=missing")
+    if source_issue:
+        detail_parts.append(f"source_warning={source_issue}")
     return FormIDWorldResolution(
         status="ok",
         detail=", ".join(detail_parts),
