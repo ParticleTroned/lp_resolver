@@ -1160,6 +1160,13 @@ class ScanWorker(QObject):
 
 
 class MainWindow(QMainWindow):
+    _DUPLICATE_CONFLICT_TYPES: set[str] = {
+        "duplicate_exact",
+        "duplicate_divergent",
+        "duplicate_condition_exclusive",
+        "duplicate_refinement_disjoint",
+    }
+
     _TYPE_LABELS: dict[str, str] = {
         "lp_vs_pl_overlap": "Overlap",
         "duplicate_exact": "Exact Duplicates",
@@ -1208,6 +1215,7 @@ class MainWindow(QMainWindow):
         self._is_closing = False
         self._conflict_min_widths = [72, 64, 72, 32, 32, 72]
         self._light_scale_menu: QMenu | None = None
+        self._formid_world_resolution_cache: dict[str, FormIDWorldResolution] = {}
 
         self._build_ui()
         self._load_persistent_paths()
@@ -1294,6 +1302,7 @@ class MainWindow(QMainWindow):
         menu_layout.setSpacing(6)
 
         self.light_scale_enabled_cb = QCheckBox("Enable Separate Intensity Patch (Experimental)")
+        self.light_scale_enabled_cb.setChecked(False)
         self.light_scale_enabled_cb.setToolTip(
             "When enabled, Export Patch writes a second patch mod after conflict export.\n"
             "That second mod scales light intensity in effective winner LP JSON files."
@@ -1402,6 +1411,14 @@ class MainWindow(QMainWindow):
         if self.scan_result is not None:
             self.on_conflict_selection_changed()
 
+    def _on_conflict_visibility_options_changed(self, *_args) -> None:
+        self._save_persistent_paths()
+        if self.scan_result is None:
+            return
+        selected_nifs = self._selected_nif_paths()
+        self._populate_conflicts_table(preserve_nif_paths=selected_nifs)
+        self.summary_label.setText(self._build_scan_summary_text(self.scan_result))
+
     def _light_scale_config(self) -> LightIntensityPatchConfig:
         return LightIntensityPatchConfig(
             scale_factor=self._light_scale_factor(),
@@ -1427,7 +1444,10 @@ class MainWindow(QMainWindow):
         light_scale_slider_value = int(settings.value("light_scale/slider_value", 100, int))
         light_scale_scope = settings.value("light_scale/scope", "all", str).strip().lower()
         light_scale_portal_strict_only = bool(settings.value("light_scale/portal_strict_only", False, bool))
-        formid_preview_enabled = bool(settings.value("preview/formid_world_enabled", False, bool))
+        formid_preview_enabled = bool(settings.value("preview/formid_world_enabled", True, bool))
+        hide_unresolved_formid_local = bool(
+            settings.value("filters/hide_unresolved_formid_local_duplicates", True, bool)
+        )
 
         if mo2_root:
             self.mo2_root_edit.setText(mo2_root)
@@ -1446,6 +1466,7 @@ class MainWindow(QMainWindow):
             self.light_scale_scope_combo.setCurrentIndex(scope_index)
         self.light_scale_portal_strict_cb.setChecked(light_scale_portal_strict_only)
         self.formid_preview_enabled_cb.setChecked(formid_preview_enabled)
+        self.hide_unresolved_formid_local_duplicates_cb.setChecked(hide_unresolved_formid_local)
         self._refresh_light_scale_button()
 
         self._ensure_output_dir_exists(self._resolve_output_dir_text(self.output_dir_edit.text().strip()))
@@ -1463,6 +1484,11 @@ class MainWindow(QMainWindow):
             settings.setValue("light_scale/portal_strict_only", self.light_scale_portal_strict_cb.isChecked())
         if hasattr(self, "formid_preview_enabled_cb"):
             settings.setValue("preview/formid_world_enabled", self.formid_preview_enabled_cb.isChecked())
+        if hasattr(self, "hide_unresolved_formid_local_duplicates_cb"):
+            settings.setValue(
+                "filters/hide_unresolved_formid_local_duplicates",
+                self.hide_unresolved_formid_local_duplicates_cb.isChecked(),
+            )
         settings.sync()
 
     def _resolve_output_dir_text(self, output_dir_text: str) -> Path:
@@ -1671,13 +1697,20 @@ class MainWindow(QMainWindow):
             "(for example interior vs exterior variants), so they usually do not stack simultaneously."
         )
         self.formid_preview_enabled_cb = QCheckBox("FormID LP Preview (Experimental)")
-        self.formid_preview_enabled_cb.setChecked(False)
+        self.formid_preview_enabled_cb.setChecked(True)
         self.formid_preview_enabled_cb.setToolTip(
             "Enable world-space preview for FormID LP targets.\n"
             "When on, the resolver reads active plugins, resolves winning REFR/ACHR reference records,\n"
             "and transforms LP local points with world position/rotation/scale."
         )
         self.formid_preview_enabled_cb.toggled.connect(self._on_formid_preview_options_changed)
+        self.hide_unresolved_formid_local_duplicates_cb = QCheckBox("Hide Unresolved FormID Local-Only Duplicates")
+        self.hide_unresolved_formid_local_duplicates_cb.setChecked(True)
+        self.hide_unresolved_formid_local_duplicates_cb.setToolTip(
+            "Hide FormID duplicate conflicts where winning REFR/ACHR world transform cannot be resolved.\n"
+            "These entries are local-only overlap estimates and can represent different placed instances."
+        )
+        self.hide_unresolved_formid_local_duplicates_cb.toggled.connect(self._on_conflict_visibility_options_changed)
 
         browse_mo2_btn = QPushButton("Browse")
         browse_profile_btn = QPushButton("Browse")
@@ -1768,9 +1801,14 @@ class MainWindow(QMainWindow):
         filter_row_primary.addWidget(self.cross_mod_duplicates_cb)
         filter_row_primary.addWidget(self.ignore_duplicate_exact_cb)
         filter_row_primary.addWidget(self.include_overridden_files_cb)
-        filter_row_primary.addWidget(self.formid_preview_enabled_cb)
         filter_row_primary.addStretch(1)
         grid.addLayout(filter_row_primary, 5, 0, 1, 3)
+
+        filter_row_secondary = QHBoxLayout()
+        filter_row_secondary.addWidget(self.formid_preview_enabled_cb)
+        filter_row_secondary.addWidget(self.hide_unresolved_formid_local_duplicates_cb)
+        filter_row_secondary.addStretch(1)
+        grid.addLayout(filter_row_secondary, 6, 0, 1, 3)
 
         for btn in (
             self.scan_btn,
@@ -1793,7 +1831,7 @@ class MainWindow(QMainWindow):
         button_row_primary.addWidget(apply_overlap_disable_btn)
         button_row_primary.addWidget(apply_highest_duplicates_btn)
         button_row_primary.addStretch(1)
-        grid.addLayout(button_row_primary, 6, 0, 1, 3)
+        grid.addLayout(button_row_primary, 7, 0, 1, 3)
 
         return group
 
@@ -2028,6 +2066,31 @@ class MainWindow(QMainWindow):
             include_overridden_files=self.include_overridden_files_cb.isChecked(),
         )
 
+    def _build_scan_summary_text(self, result: ScanResult) -> str:
+        visible_conflicts = len(self._conflict_by_nif)
+        hidden_conflicts = max(0, len(result.conflicts) - visible_conflicts)
+        summary = (
+            "Enabled mods: {0} | LP files: {1} | PL candidates: {2} | LP entries: {3} | PL targets: {4} | "
+            "Conflicts(raw/filtered/visible): {5}/{6}/{7}".format(
+                result.enabled_mod_count,
+                result.lp_candidate_files,
+                result.pl_candidate_files,
+                len(result.lp_entries),
+                len(result.pl_targets),
+                len(result.detected_conflicts),
+                len(result.conflicts),
+                visible_conflicts,
+            )
+        )
+        summary += f" | Order source: {result.mod_order_source}"
+        if hidden_conflicts > 0 and self.hide_unresolved_formid_local_duplicates_cb.isChecked():
+            summary += f" | Hidden unresolved FormID local-only duplicates: {hidden_conflicts}"
+        if not result.config.include_overridden_files:
+            summary += f" | Overridden skipped LP/PL: {result.lp_overridden_files}/{result.pl_overridden_files}"
+        if result.synthetic_modlist_path is not None:
+            summary += f" | Synthetic list: {result.synthetic_modlist_path}"
+        return summary
+
     def _validate_scan_inputs(self) -> ScanConfig | None:
         config = self._build_scan_config()
         errors: list[str] = []
@@ -2084,6 +2147,7 @@ class MainWindow(QMainWindow):
         self._scan_in_progress = True
         self.scan_btn.setEnabled(False)
         self.scan_result = None
+        self._formid_world_resolution_cache = {}
         self.summary_label.setText("Scanning...")
         self.detail_text.setPlainText("")
         self._entry_selection_by_nif = {}
@@ -2131,26 +2195,7 @@ class MainWindow(QMainWindow):
             self._load_default_decisions_if_present()
 
             self._populate_conflicts_table()
-            self.summary_label.setText(
-                "Enabled mods: {0} | LP files: {1} | PL candidates: {2} | LP entries: {3} | PL targets: {4} | "
-                "Conflicts(raw/filtered): {5}/{6}".format(
-                    result.enabled_mod_count,
-                    result.lp_candidate_files,
-                    result.pl_candidate_files,
-                    len(result.lp_entries),
-                    len(result.pl_targets),
-                    len(result.detected_conflicts),
-                    len(result.conflicts),
-                )
-            )
-            self.summary_label.setText(self.summary_label.text() + f" | Order source: {result.mod_order_source}")
-            if not result.config.include_overridden_files:
-                self.summary_label.setText(
-                    self.summary_label.text()
-                    + f" | Overridden skipped LP/PL: {result.lp_overridden_files}/{result.pl_overridden_files}"
-                )
-            if result.synthetic_modlist_path is not None:
-                self.summary_label.setText(self.summary_label.text() + f" | Synthetic list: {result.synthetic_modlist_path}")
+            self.summary_label.setText(self._build_scan_summary_text(result))
         except Exception as exc:  # noqa: BLE001
             self.summary_label.setText("Scan finished, but UI update failed.")
             QMessageBox.critical(
@@ -2296,7 +2341,8 @@ class MainWindow(QMainWindow):
             if self.scan_result is None:
                 return False
 
-            for row, conflict in enumerate(self.scan_result.conflicts):
+            visible_conflicts = self._visible_conflicts()
+            for row, conflict in enumerate(visible_conflicts):
                 self._conflict_by_nif[conflict.nif_path_canonical] = conflict
                 self.conflicts_table.insertRow(row)
                 lp_json_summary = self._summarize_lp_json_sources(conflict)
@@ -2689,6 +2735,51 @@ class MainWindow(QMainWindow):
         else:
             self._entry_selection_by_nif.pop(conflict.nif_path_canonical, None)
 
+    def _formid_world_resolution_for_target(self, target_key: str) -> FormIDWorldResolution | None:
+        if not _is_formid_target(target_key):
+            return None
+        if self.scan_result is None:
+            return None
+        cached = self._formid_world_resolution_cache.get(target_key)
+        if cached is not None:
+            return cached
+        try:
+            resolution = resolve_formid_world_resolution(
+                str(self.scan_result.mods_dir),
+                str(self.scan_result.profile_path),
+                target_key,
+            )
+        except Exception as exc:  # noqa: BLE001
+            detail = self._error_detail_line(str(exc))
+            resolution = FormIDWorldResolution(status="error", detail=detail, context=None)
+        self._formid_world_resolution_cache[target_key] = resolution
+        return resolution
+
+    def _is_duplicate_only_conflict(self, conflict: Conflict) -> bool:
+        types = set(conflict.conflict_types)
+        return bool(types & self._DUPLICATE_CONFLICT_TYPES) and "lp_vs_pl_overlap" not in types
+
+    def _is_unresolved_formid_local_duplicate_conflict(self, conflict: Conflict) -> bool:
+        if not _is_formid_target(conflict.nif_path_canonical):
+            return False
+        if not self._is_duplicate_only_conflict(conflict):
+            return False
+        resolution = self._formid_world_resolution_for_target(conflict.nif_path_canonical)
+        if resolution is None:
+            return False
+        return resolution.status != "ok"
+
+    def _visible_conflicts(self) -> list[Conflict]:
+        if self.scan_result is None:
+            return []
+        if not self.hide_unresolved_formid_local_duplicates_cb.isChecked():
+            return list(self.scan_result.conflicts)
+        return [
+            conflict
+            for conflict in self.scan_result.conflicts
+            if not self._is_unresolved_formid_local_duplicate_conflict(conflict)
+        ]
+
     def _resolve_formid_world_resolution_for_conflict(
         self,
         conflict: Conflict,
@@ -2700,15 +2791,9 @@ class MainWindow(QMainWindow):
         if self.scan_result is None:
             return (None, "FormID world preview: unavailable (no scan result).")
 
-        try:
-            resolution = resolve_formid_world_resolution(
-                str(self.scan_result.mods_dir),
-                str(self.scan_result.profile_path),
-                conflict.nif_path_canonical,
-            )
-        except Exception as exc:  # noqa: BLE001
-            detail = self._error_detail_line(str(exc))
-            resolution = FormIDWorldResolution(status="error", detail=detail, context=None)
+        resolution = self._formid_world_resolution_for_target(conflict.nif_path_canonical)
+        if resolution is None:
+            return (None, "FormID world preview: unavailable (target is not FormID or no scan result).")
         if resolution.status == "ok":
             return (resolution, f"FormID world preview: active ({resolution.detail}).")
         return (resolution, f"FormID world preview: {resolution.status} ({resolution.detail}).")
@@ -3490,6 +3575,17 @@ class MainWindow(QMainWindow):
         if pairs_with_points > 0:
             overlapping_pairs = distance_overlap_pairs + radius_overlap_pairs
             min_text = "n/a" if min_pair_distance is None else f"{min_pair_distance:.2f}"
+            if _is_formid_target(conflict.nif_path_canonical) and world_context is None:
+                if overlapping_pairs > 0:
+                    return (
+                        f"Uncertain (local-only FormID): {overlapping_pairs}/{pairs_with_points} LP entry pairs overlap "
+                        f"in local coordinates (fixed<= {threshold:.1f} or radius-aware). "
+                        "World placement could not be resolved from winning REFR/ACHR records."
+                    )
+                return (
+                    f"Uncertain (local-only FormID): 0/{pairs_with_points} LP entry pairs overlap in local coordinates. "
+                    "World placement could not be resolved from winning REFR/ACHR records."
+                )
             if overlapping_pairs > 0:
                 criteria_hits: list[str] = []
                 if distance_overlap_pairs > 0:

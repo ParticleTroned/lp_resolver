@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 _PATH_KEY_HINTS = ("nif", "mesh", "model", "path", "file")
-_FORM_ID_RE = re.compile(r"^\s*(?:0x)?([0-9a-fA-F]{1,8})\s*~\s*([^\s~]+)\s*$")
+_FORM_ID_RE = re.compile(r"^\s*(?:0x)?([0-9a-fA-F]{1,8})\s*~\s*([^~]+?)\s*$")
 _EXCLUDED_SETTING_KEYS = {
     "nif",
     "mesh",
