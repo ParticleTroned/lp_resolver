@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .models import CandidateFile, LightPlacerEntry, ParseIssue, ParticleLightTarget
-from .normalize import canonical_nif, normalized_settings, value_signature
+from .normalize import canonical_form_id, canonical_nif, normalized_settings, value_signature
 
 _NIF_KEY_HINTS = ("nif", "mesh", "model", "path", "file")
+_FORM_ID_KEY_HINTS = ("formid", "formids", "form_id", "form_ids")
 _LP_FIELD_HINTS = ("radius", "intensity", "brightness", "color", "falloff", "fade", "flicker", "shadow")
 _LP_STRUCT_HINTS = ("lights", "points", "data", "flags", "light")
 _PL_FIELD_HINTS = ("particle", "billboard", "effectshader", "effect_shader", "vertexcolor", "vertex_color")
@@ -72,6 +73,30 @@ def _extract_direct_nif_candidates(node: Mapping[str, Any]) -> set[str]:
         if isinstance(value, dict) and any(hint in key_l for hint in _NIF_KEY_HINTS):
             for nested_value in value.values():
                 if isinstance(nested_value, str) and ".nif" in nested_value.lower():
+                    candidates.add(nested_value)
+    return candidates
+
+
+def _extract_direct_form_id_candidates(node: Mapping[str, Any]) -> set[str]:
+    candidates: set[str] = set()
+    for key, value in node.items():
+        key_l = str(key).lower()
+        if not any(hint in key_l for hint in _FORM_ID_KEY_HINTS):
+            continue
+
+        if isinstance(value, str):
+            candidates.add(value)
+            continue
+
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str):
+                    candidates.add(item)
+            continue
+
+        if isinstance(value, dict):
+            for nested_value in value.values():
+                if isinstance(nested_value, str):
                     candidates.add(nested_value)
     return candidates
 
@@ -150,7 +175,8 @@ class LightPlacerAdapter:
         seen: set[tuple[str, str]] = set()
         for node in _iter_dict_nodes(root):
             nif_candidates = _extract_direct_nif_candidates(node)
-            if not nif_candidates:
+            form_id_candidates = _extract_direct_form_id_candidates(node)
+            if not nif_candidates and not form_id_candidates:
                 continue
             if not _node_looks_like_light_placer(node) and not likely_lp_path:
                 continue
@@ -197,11 +223,56 @@ class LightPlacerAdapter:
                     )
                 )
 
+            for raw_form_id in sorted(form_id_candidates):
+                canonical = canonical_form_id(raw_form_id)
+                if canonical is None:
+                    issues.append(
+                        ParseIssue(
+                            severity="warn",
+                            message=f"Invalid FormID target '{raw_form_id}'",
+                            source_file=candidate.relative_path,
+                            source_mod=candidate.mod_name,
+                        )
+                    )
+                    continue
+
+                sig = value_signature(settings)
+                dedupe_key = (canonical, sig)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+
+                entry_id = value_signature(
+                    {
+                        "mod": candidate.mod_name,
+                        "priority": candidate.mod_priority,
+                        "file": candidate.relative_path,
+                        "nif": canonical,
+                        "settings": settings,
+                    }
+                )
+                entries.append(
+                    LightPlacerEntry(
+                        entry_id=entry_id,
+                        source_mod=candidate.mod_name,
+                        source_priority=candidate.mod_priority,
+                        source_file=candidate.relative_path,
+                        nif_path_raw=raw_form_id,
+                        nif_path_canonical=canonical,
+                        settings=settings,
+                        full_payload=dict(node),
+                    )
+                )
+
         if likely_lp_path and not entries:
+            if root_has_lp_hints:
+                message = "No extractable LP targets found (expected NIF path fields or formID/formIDs keys)."
+            else:
+                message = "No Light Placer-like keys found in JSON payload."
             issues.append(
                 ParseIssue(
                     severity="info",
-                    message="No Light Placer-like entries found",
+                    message=message,
                     source_file=candidate.relative_path,
                     source_mod=candidate.mod_name,
                 )

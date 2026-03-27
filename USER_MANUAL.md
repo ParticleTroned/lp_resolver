@@ -1,5 +1,5 @@
 # Placed Lights and Particle Lights Conflict Resolver  
-Version: 0.1.6
+Version: 0.1.7
 
 This guide is for first-time users. It explains what the tool changes, how mod load order affects results (MO2 or Vortex), and how to export a safe patch.
 
@@ -27,7 +27,7 @@ If you still test the Windows `.exe` under Proton, set `Start in` to the app fol
 
 The resolver scans your active MO2 or Vortex profile and finds lighting conflicts:
 
-- LP vs LP duplicates (same NIF targeted more than once)
+- LP vs LP duplicates (same target key targeted more than once: NIF or FormID)
 - LP vs PL overlaps (Light Placer + ENB Particle Lights on same NIF)
 
 Then it lets you choose which LP entries should stay (single or multiple) and exports an override patch mod.
@@ -120,11 +120,11 @@ Use this panel to set paths, scan scope, and filters.
 
 ### B) Conflicts table
 
-Each row is one NIF conflict group:
+Each row is one target-key conflict group:
 
 - `Types`: conflict category
 - `LP #` / `PL #`: number of involved entries
-- `Decision`: current selected action for that NIF
+- `Decision`: current selected action for that target key
 - Right-click row(s): open contributing source folder(s) in Explorer
 
 ![Conflicts table](images/manual-conflicts-table.PNG)
@@ -144,6 +144,12 @@ Batch decision helper buttons are available for fast baseline cleanup.
 - Colored circles: LP/PL anchors
 - Circle size: preview radius estimate
 - Split-color marker: multiple entries at same anchor point
+
+FormID-targeted LP notes:
+
+- If LP entries share the same FormID and include numeric `points`/`point` data, preview uses those local XYZ values plus radius estimates.
+- For FormID targets, LP JSON does not provide mesh path data, so mesh silhouette preview is unavailable.
+- For node-only FormID entries (or mixed FormID targets in one group), XYZ drawing is intentionally suppressed and shown as unavailable.
 
 ![Anchor Preview](images/manual-anchor-preview.PNG)
 
@@ -236,7 +242,7 @@ Practical tuning workflow:
 
 `Overlap`
 
-- LP and PL both target same NIF.
+- LP and PL both target the same key (typically the same NIF).
 - Risk: overbright + extra light cost.
 
 `Exact Duplicates`

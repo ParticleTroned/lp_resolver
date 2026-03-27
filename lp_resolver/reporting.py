@@ -11,6 +11,15 @@ from typing import Any
 from .models import Conflict, ParseIssue
 
 
+def _target_type_label(target_key: str) -> str:
+    key = str(target_key).strip().lower()
+    if key.startswith("formid:"):
+        return "formid"
+    if key.endswith(".nif"):
+        return "nif"
+    return "other"
+
+
 def build_report_payload(
     *,
     mo2_root: Path,
@@ -90,6 +99,10 @@ def build_report_payload(
 
 def render_markdown_report(payload: dict[str, Any]) -> str:
     summary = payload["summary"]
+    conflicts = payload.get("conflicts", [])
+    formid_conflicts = sum(
+        1 for conflict in conflicts if _target_type_label(conflict.get("nif_path_canonical", "")) == "formid"
+    )
     lines: list[str] = [
         "# Light Placer Conflict Report",
         "",
@@ -109,6 +122,12 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
         f"- Normalized PL targets: {summary['pl_targets']}",
         f"- Conflicts: {summary['conflict_count']}",
     ]
+    if formid_conflicts > 0:
+        lines.append(f"- FormID-keyed conflicts: {formid_conflicts}")
+        lines.append(
+            "- FormID preview mode uses LP JSON local points/radius only; no mesh path is available from LP JSON."
+        )
+        lines.append("- LP-vs-PL overlap still requires a shared NIF target key.")
     synthetic_modlist_path = payload.get("synthetic_modlist_path")
     if synthetic_modlist_path:
         lines.append(f"- Synthetic Vortex modlist: `{synthetic_modlist_path}`")
@@ -124,19 +143,23 @@ def render_markdown_report(payload: dict[str, Any]) -> str:
                 f"- [{issue['severity']}] `{issue['source_mod']}/{issue['source_file']}`: {issue['message']}"
             )
 
-    conflicts = payload.get("conflicts", [])
     if conflicts:
         lines.extend(["", "## Conflicts"])
         for conflict in conflicts:
+            target_key = conflict["nif_path_canonical"]
+            target_type = _target_type_label(target_key)
             lines.extend(
                 [
                     "",
-                    f"### `{conflict['nif_path_canonical']}`",
+                    f"### `{target_key}`",
+                    f"- Target type: {target_type}",
                     f"- Types: {', '.join(conflict['conflict_types'])}",
                     f"- LP candidates: {len(conflict['lp_entries'])}",
                     f"- PL overlap: {'yes' if conflict['pl_targets'] else 'no'}",
                 ]
             )
+            if target_type == "formid":
+                lines.append("- Preview note: local LP XYZ/radius only; mesh-based preview is unavailable.")
             if conflict["lp_entries"]:
                 lines.append("- LP entries:")
                 for entry in conflict["lp_entries"]:

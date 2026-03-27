@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 _PATH_KEY_HINTS = ("nif", "mesh", "model", "path", "file")
+_FORM_ID_RE = re.compile(r"^\s*(?:0x)?([0-9a-fA-F]{1,8})\s*~\s*([^\s~]+)\s*$")
 _EXCLUDED_SETTING_KEYS = {
     "nif",
     "mesh",
@@ -52,6 +53,29 @@ def canonical_nif(path: str | None) -> str | None:
     return value
 
 
+def canonical_form_id(form_id: str | None) -> str | None:
+    if not form_id:
+        return None
+    match = _FORM_ID_RE.match(form_id.strip())
+    if match is None:
+        return None
+
+    raw_id = match.group(1)
+    plugin = match.group(2).strip().lower()
+    if not plugin:
+        return None
+
+    try:
+        form_value = int(raw_id, 16)
+    except ValueError:
+        return None
+    if form_value < 0:
+        return None
+
+    normalized_id = f"{form_value:x}"
+    return f"formid:{plugin}:{normalized_id}"
+
+
 def _normalize_value(value: Any, parent_key: str = "") -> Any:
     if isinstance(value, dict):
         normalized: dict[str, Any] = {}
@@ -80,4 +104,3 @@ def normalized_settings(payload: dict[str, Any]) -> dict[str, Any]:
 def value_signature(value: Any) -> str:
     packed = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha1(packed.encode("utf-8")).hexdigest()
-

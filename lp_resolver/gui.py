@@ -234,6 +234,14 @@ _LP_POINT_KEY_HINTS = ("point", "points", "offset", "position", "pos", "anchor",
 _LP_NODE_KEY_HINTS = ("node", "nodes")
 
 
+def _is_formid_target(value: str) -> bool:
+    return value.strip().lower().startswith("formid:")
+
+
+def _is_nif_target(value: str) -> bool:
+    return value.strip().lower().endswith(".nif")
+
+
 def _extract_lp_anchor_points(settings: dict[str, Any]) -> list[tuple[float, float, float]]:
     points: list[tuple[float, float, float]] = []
     for lights in _iter_lights_lists(settings):
@@ -1161,7 +1169,7 @@ class MainWindow(QMainWindow):
 
     _TYPE_HELP: dict[str, str] = {
         "lp_vs_pl_overlap": (
-            "LP and PL both target this NIF. Potential stacked lighting overhead and overbright results."
+            "LP and PL both target the same key (usually a NIF). Potential stacked lighting overhead and overbright results."
         ),
         "duplicate_exact": (
             "Multiple LP entries with effectively identical settings. Usually redundant overhead without quality gain."
@@ -1780,7 +1788,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(box)
 
         self.conflicts_table = QTableWidget(0, 6)
-        self.conflicts_table.setHorizontalHeaderLabels(["NIF", "Types", "LP JSON", "LP #", "PL #", "Decision"])
+        self.conflicts_table.setHorizontalHeaderLabels(["Target", "Types", "LP JSON", "LP #", "PL #", "Decision"])
         self.conflicts_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.conflicts_table.setSelectionMode(QTableWidget.ExtendedSelection)
         self.conflicts_table.itemSelectionChanged.connect(self.on_conflict_selection_changed)
@@ -1793,7 +1801,7 @@ class MainWindow(QMainWindow):
         self.conflicts_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.conflicts_table.setToolTip(
             "Columns:\n"
-            "- NIF: canonical mesh path\n"
+            "- Target: canonical NIF path or normalized FormID key\n"
             "- Types: detected conflict types (hover value for meaning/overhead)\n"
             "- LP JSON: contributing LightPlacer files\n"
             "- LP # / PL #: candidate counts\n"
@@ -1803,7 +1811,7 @@ class MainWindow(QMainWindow):
 
         header = self.conflicts_table.horizontalHeader()
         header.setMinimumSectionSize(28)
-        header.setSectionResizeMode(0, QHeaderView.Interactive)  # NIF
+        header.setSectionResizeMode(0, QHeaderView.Interactive)  # Target
         header.setSectionResizeMode(1, QHeaderView.Interactive)  # Types
         header.setSectionResizeMode(2, QHeaderView.Interactive)  # LP Mods
         header.setSectionResizeMode(3, QHeaderView.Interactive)  # LP #
@@ -1852,7 +1860,7 @@ class MainWindow(QMainWindow):
             "  6) source_file\n"
             "  7) entry_id\n"
             "- Choose Entries: keep selected LP entries (multi-select)\n"
-            "- Disable LP: export no LP entries for this NIF\n"
+            "- Disable LP: export no LP entries for this target key\n"
             "Note: Keep Highest is not quality-aware; it only follows priority/tie-break order.\n"
             "Vortex note: Keep Highest currently cannot determine priority order reliably from Vortex lists.\n"
             "For Vortex profiles, review results manually before exporting.\n"
@@ -2940,7 +2948,7 @@ class MainWindow(QMainWindow):
         )
 
         lines = [
-            f"NIF: {conflict.nif_path_canonical}",
+            f"Target: {conflict.nif_path_canonical}",
             f"Types: {self._format_conflict_types(conflict.conflict_types)}",
             f"LP entries: {len(conflict.lp_entries)} | PL targets: {len(conflict.pl_targets)}",
             "",
@@ -3009,7 +3017,7 @@ class MainWindow(QMainWindow):
         def add_plain(line: str = "") -> None:
             html_lines.append(escape(line))
 
-        add_plain(f"NIF: {conflict.nif_path_canonical}")
+        add_plain(f"Target: {conflict.nif_path_canonical}")
         add_plain(f"Types: {self._format_conflict_types(conflict.conflict_types)}")
         add_plain(f"LP entries: {len(conflict.lp_entries)} | PL targets: {len(conflict.pl_targets)}")
         add_plain("")
@@ -3079,16 +3087,28 @@ class MainWindow(QMainWindow):
         conflict: Conflict,
         node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
     ) -> list[dict[str, Any]]:
+        target_is_formid = _is_formid_target(conflict.nif_path_canonical)
+        distinct_targets = {
+            entry.nif_path_canonical.strip().lower()
+            for entry in conflict.lp_entries
+            if isinstance(entry.nif_path_canonical, str) and entry.nif_path_canonical.strip()
+        }
+        suppress_points = target_is_formid and len(distinct_targets) > 1
         series: list[dict[str, Any]] = []
         for idx, entry in enumerate(conflict.lp_entries):
             points = _extract_lp_anchor_points(entry.settings)
             nodes = _extract_lp_anchor_nodes(entry.settings)
             point_source = "json" if points else "none"
-            if not points and nodes:
+            if suppress_points:
+                points = []
+                point_source = "mixed_formid_targets"
+            elif not points and nodes and not target_is_formid:
                 node_points = self._resolve_node_anchor_points(nodes, node_anchor_points)
                 if node_points:
                     points = node_points
                     point_source = "nif_node"
+            elif not points and nodes and target_is_formid:
+                point_source = "node_only_formid"
             radius_units = _estimate_entry_radius_units(entry.settings)
             label = f"{self._short_name(entry.source_file)} [{entry.entry_id[:8]}]"
             series.append(
@@ -3193,6 +3213,12 @@ class MainWindow(QMainWindow):
             self.anchor_preview.set_mesh_status_text(f"Mesh cloud: {status}")
             return status, []
 
+        if not _is_nif_target(conflict.nif_path_canonical):
+            self.anchor_preview.clear_mesh_points()
+            status = "preview unavailable (LP JSON FormID targets do not include mesh path data)"
+            self.anchor_preview.set_mesh_status_text("Mesh cloud: n/a (no mesh information in LP JSON)")
+            return status, []
+
         preview = load_mesh_preview_for_nif(
             str(self.scan_result.mods_dir),
             str(self.scan_result.profile_path),
@@ -3212,6 +3238,8 @@ class MainWindow(QMainWindow):
     def _load_nif_radius_hint_for_conflict(self, conflict: Conflict) -> tuple[float | None, str]:
         if self.scan_result is None:
             return (None, "no_scan_result")
+        if not _is_nif_target(conflict.nif_path_canonical):
+            return (None, "not_a_nif_target")
         return load_nif_bounding_radius_for_nif(
             str(self.scan_result.mods_dir),
             str(self.scan_result.profile_path),
@@ -3233,6 +3261,8 @@ class MainWindow(QMainWindow):
             return ({}, "")
         if self.scan_result is None:
             return ({}, "NIF node anchors: unavailable (no scan result).")
+        if not _is_nif_target(conflict.nif_path_canonical):
+            return ({}, "NIF node anchors: unavailable for formID target.")
 
         node_positions, detail = load_nif_node_positions_for_nif(
             str(self.scan_result.mods_dir),
@@ -3348,6 +3378,12 @@ class MainWindow(QMainWindow):
                 f"Minimum pair distance: {min_text}."
             )
 
+        if _is_formid_target(conflict.nif_path_canonical):
+            return (
+                "No numeric local XYZ points available for overlap preview. "
+                "Entries are node-only or missing point/offset fields for this FormID target."
+            )
+
         node_pairs = 0
         overlapping_node_pairs = 0
         for i in range(len(series)):
@@ -3411,6 +3447,15 @@ class MainWindow(QMainWindow):
         mesh_points: list[tuple[float, float, float]] | None = None,
         node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
     ) -> str:
+        if _is_formid_target(conflict.nif_path_canonical):
+            distinct_targets = {
+                entry.nif_path_canonical.strip().lower()
+                for entry in conflict.lp_entries
+                if isinstance(entry.nif_path_canonical, str) and entry.nif_path_canonical.strip()
+            }
+            if len(distinct_targets) > 1:
+                return "Projection note: mixed FormID targets; XYZ preview is intentionally disabled."
+
         points: list[tuple[float, float, float]] = []
         for entry in conflict.lp_entries:
             entry_points = _extract_lp_anchor_points(entry.settings)
@@ -3426,6 +3471,12 @@ class MainWindow(QMainWindow):
                 points.extend(target_points)
             elif mesh_center is not None:
                 points.append(mesh_center)
+
+        if _is_formid_target(conflict.nif_path_canonical) and len(points) < 2:
+            return (
+                "Projection note: FormID local preview has insufficient numeric XYZ points; "
+                "node-only entries cannot be projected without mesh/node transform data."
+            )
 
         if len(points) < 2:
             return ""
@@ -3446,11 +3497,27 @@ class MainWindow(QMainWindow):
         node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
     ) -> str:
         lines: list[str] = []
+        target_is_formid = _is_formid_target(conflict.nif_path_canonical)
+        distinct_targets = {
+            entry.nif_path_canonical.strip().lower()
+            for entry in conflict.lp_entries
+            if isinstance(entry.nif_path_canonical, str) and entry.nif_path_canonical.strip()
+        }
+        suppress_points = target_is_formid and len(distinct_targets) > 1
+        if target_is_formid:
+            lines.append("FormID local preview mode:")
+            lines.append("- using LP JSON local points/radius only")
+            lines.append("- mesh information is not available in LP JSON")
+            if suppress_points:
+                lines.append("- XYZ drawing disabled because LP entries map to different FormID targets in this group")
+            lines.append("")
         for idx, entry in enumerate(conflict.lp_entries, start=1):
             points = _extract_lp_anchor_points(entry.settings)
             nodes = sorted(_extract_lp_anchor_nodes(entry.settings))
             points_from_nodes = False
-            if not points and nodes:
+            if suppress_points:
+                points = []
+            elif not points and nodes and not target_is_formid:
                 node_points = self._resolve_node_anchor_points(set(nodes), node_anchor_points)
                 if node_points:
                     points = node_points
@@ -3472,7 +3539,12 @@ class MainWindow(QMainWindow):
                 else:
                     lines.append(f"   points: {formatted_points}")
             else:
-                lines.append("   points: (none)")
+                if target_is_formid and nodes:
+                    lines.append("   points: (unavailable - node-only entry for FormID target)")
+                elif suppress_points:
+                    lines.append("   points: (suppressed - mixed FormID targets)")
+                else:
+                    lines.append("   points: (none)")
 
             if nodes:
                 formatted_nodes = ", ".join(nodes[:8])
@@ -3796,7 +3868,7 @@ class MainWindow(QMainWindow):
 
         message = (
             f"Conflict patch written to:\n{result.patch_mod_dir}\n\n"
-            f"Selected NIF decisions: {result.selected_nif_count}\n"
+            f"Selected target decisions: {result.selected_nif_count}\n"
             f"Overridden source JSON files: {len(result.override_files)}\n"
             f"Exported LP entries: {result.selected_entry_count}\n"
             f"Stale overrides removed: {result.stale_removed_count}\n"
