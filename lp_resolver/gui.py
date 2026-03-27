@@ -13,6 +13,7 @@ from typing import Any
 from . import __version__
 from .decisions import Decision, apply_decisions, load_decisions, make_decision, save_decisions
 from .engine import ScanConfig, ScanResult, run_scan
+from .formid_preview import FormIDWorldResolution, resolve_formid_world_resolution, transform_local_points_to_world
 from .models import Conflict
 from .nif_preview import load_mesh_preview_for_nif, load_nif_bounding_radius_for_nif, load_nif_node_positions_for_nif
 from .patch_writer import LightIntensityPatchConfig, write_light_intensity_patch_mod, write_patch_mod
@@ -1396,6 +1397,11 @@ class MainWindow(QMainWindow):
         self._refresh_light_scale_button()
         self._save_persistent_paths()
 
+    def _on_formid_preview_options_changed(self, *_args) -> None:
+        self._save_persistent_paths()
+        if self.scan_result is not None:
+            self.on_conflict_selection_changed()
+
     def _light_scale_config(self) -> LightIntensityPatchConfig:
         return LightIntensityPatchConfig(
             scale_factor=self._light_scale_factor(),
@@ -1421,6 +1427,7 @@ class MainWindow(QMainWindow):
         light_scale_slider_value = int(settings.value("light_scale/slider_value", 100, int))
         light_scale_scope = settings.value("light_scale/scope", "all", str).strip().lower()
         light_scale_portal_strict_only = bool(settings.value("light_scale/portal_strict_only", False, bool))
+        formid_preview_enabled = bool(settings.value("preview/formid_world_enabled", False, bool))
 
         if mo2_root:
             self.mo2_root_edit.setText(mo2_root)
@@ -1438,6 +1445,7 @@ class MainWindow(QMainWindow):
         if scope_index >= 0:
             self.light_scale_scope_combo.setCurrentIndex(scope_index)
         self.light_scale_portal_strict_cb.setChecked(light_scale_portal_strict_only)
+        self.formid_preview_enabled_cb.setChecked(formid_preview_enabled)
         self._refresh_light_scale_button()
 
         self._ensure_output_dir_exists(self._resolve_output_dir_text(self.output_dir_edit.text().strip()))
@@ -1453,6 +1461,8 @@ class MainWindow(QMainWindow):
             settings.setValue("light_scale/slider_value", int(self.light_scale_slider.value()))
             settings.setValue("light_scale/scope", str(self.light_scale_scope_combo.currentData() or "all"))
             settings.setValue("light_scale/portal_strict_only", self.light_scale_portal_strict_cb.isChecked())
+        if hasattr(self, "formid_preview_enabled_cb"):
+            settings.setValue("preview/formid_world_enabled", self.formid_preview_enabled_cb.isChecked())
         settings.sync()
 
     def _resolve_output_dir_text(self, output_dir_text: str) -> Path:
@@ -1660,6 +1670,14 @@ class MainWindow(QMainWindow):
             "These are overlapping anchors with mutually exclusive worldspace conditions\n"
             "(for example interior vs exterior variants), so they usually do not stack simultaneously."
         )
+        self.formid_preview_enabled_cb = QCheckBox("FormID LP Preview (Experimental)")
+        self.formid_preview_enabled_cb.setChecked(False)
+        self.formid_preview_enabled_cb.setToolTip(
+            "Enable world-space preview for FormID LP targets.\n"
+            "When on, the resolver reads active plugins, resolves winning REFR/ACHR reference records,\n"
+            "and transforms LP local points with world position/rotation/scale."
+        )
+        self.formid_preview_enabled_cb.toggled.connect(self._on_formid_preview_options_changed)
 
         browse_mo2_btn = QPushButton("Browse")
         browse_profile_btn = QPushButton("Browse")
@@ -1750,6 +1768,7 @@ class MainWindow(QMainWindow):
         filter_row_primary.addWidget(self.cross_mod_duplicates_cb)
         filter_row_primary.addWidget(self.ignore_duplicate_exact_cb)
         filter_row_primary.addWidget(self.include_overridden_files_cb)
+        filter_row_primary.addWidget(self.formid_preview_enabled_cb)
         filter_row_primary.addStretch(1)
         grid.addLayout(filter_row_primary, 5, 0, 1, 3)
 
@@ -2670,6 +2689,30 @@ class MainWindow(QMainWindow):
         else:
             self._entry_selection_by_nif.pop(conflict.nif_path_canonical, None)
 
+    def _resolve_formid_world_resolution_for_conflict(
+        self,
+        conflict: Conflict,
+    ) -> tuple[FormIDWorldResolution | None, str]:
+        if not _is_formid_target(conflict.nif_path_canonical):
+            return (None, "")
+        if not self.formid_preview_enabled_cb.isChecked():
+            return (None, "FormID world preview: disabled (using LP JSON local points).")
+        if self.scan_result is None:
+            return (None, "FormID world preview: unavailable (no scan result).")
+
+        try:
+            resolution = resolve_formid_world_resolution(
+                str(self.scan_result.mods_dir),
+                str(self.scan_result.profile_path),
+                conflict.nif_path_canonical,
+            )
+        except Exception as exc:  # noqa: BLE001
+            detail = self._error_detail_line(str(exc))
+            resolution = FormIDWorldResolution(status="error", detail=detail, context=None)
+        if resolution.status == "ok":
+            return (resolution, f"FormID world preview: active ({resolution.detail}).")
+        return (resolution, f"FormID world preview: {resolution.status} ({resolution.detail}).")
+
     def on_conflict_selection_changed(self) -> None:
         if self._scan_in_progress or self._updating_conflicts_table or self._is_closing:
             return
@@ -2720,9 +2763,13 @@ class MainWindow(QMainWindow):
             self._on_entry_selection_changed()
 
             self.detail_text.setHtml(self._render_conflict_detail_html(conflict))
-            mesh_status, mesh_points = self._load_mesh_preview_for_conflict(conflict)
+            formid_resolution, formid_status = self._resolve_formid_world_resolution_for_conflict(conflict)
+            mesh_status, mesh_points = self._load_mesh_preview_for_conflict(conflict, formid_resolution=formid_resolution)
             nif_radius_hint, _nif_radius_detail = self._load_nif_radius_hint_for_conflict(conflict)
-            node_anchor_points, node_anchor_status = self._load_nif_node_anchor_points_for_conflict(conflict)
+            node_anchor_points, node_anchor_status = self._load_nif_node_anchor_points_for_conflict(
+                conflict,
+                formid_resolution=formid_resolution,
+            )
             self.anchor_preview.set_anchor_series(
                 self._build_preview_anchor_series(
                     conflict,
@@ -2730,13 +2777,25 @@ class MainWindow(QMainWindow):
                     nif_radius_hint,
                     decision,
                     node_anchor_points=node_anchor_points,
+                    formid_resolution=formid_resolution,
                 )
             )
-            lp_summary = self._build_anchor_overlap_summary(conflict, node_anchor_points=node_anchor_points)
+            lp_summary = self._build_anchor_overlap_summary(
+                conflict,
+                node_anchor_points=node_anchor_points,
+                formid_resolution=formid_resolution,
+            )
             pl_summary = self._build_pl_localization_summary(conflict, mesh_points)
-            projection_note = self._build_projection_note(conflict, mesh_points, node_anchor_points=node_anchor_points)
+            projection_note = self._build_projection_note(
+                conflict,
+                mesh_points,
+                node_anchor_points=node_anchor_points,
+                formid_resolution=formid_resolution,
+            )
             self.anchor_summary_label.setText(f"{lp_summary} {pl_summary} {projection_note}".strip())
             mesh_text = f"Mesh: {mesh_status}"
+            if formid_status:
+                mesh_text += f"\n{formid_status}"
             if node_anchor_status:
                 mesh_text += f"\n{node_anchor_status}"
             self.mesh_status_label.setText(mesh_text)
@@ -2746,6 +2805,7 @@ class MainWindow(QMainWindow):
                     mesh_points,
                     nif_radius_hint,
                     node_anchor_points=node_anchor_points,
+                    formid_resolution=formid_resolution,
                 )
             )
         except Exception as exc:  # noqa: BLE001
@@ -3082,12 +3142,22 @@ class MainWindow(QMainWindow):
         resolved = [node_anchor_points[node] for node in sorted(nodes) if node in node_anchor_points]
         return _dedupe_points(_sanitize_points(resolved))
 
+    @staticmethod
+    def _world_context_from_formid_resolution(
+        formid_resolution: FormIDWorldResolution | None,
+    ):
+        if formid_resolution and formid_resolution.status == "ok":
+            return formid_resolution.context
+        return None
+
     def _build_anchor_series(
         self,
         conflict: Conflict,
         node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
+        formid_resolution: FormIDWorldResolution | None = None,
     ) -> list[dict[str, Any]]:
         target_is_formid = _is_formid_target(conflict.nif_path_canonical)
+        world_context = self._world_context_from_formid_resolution(formid_resolution)
         distinct_targets = {
             entry.nif_path_canonical.strip().lower()
             for entry in conflict.lp_entries
@@ -3102,13 +3172,18 @@ class MainWindow(QMainWindow):
             if suppress_points:
                 points = []
                 point_source = "mixed_formid_targets"
-            elif not points and nodes and not target_is_formid:
+            elif target_is_formid and world_context is not None and points:
+                points = transform_local_points_to_world(points, world_context)
+                point_source = "formid_world"
+            elif not points and nodes:
                 node_points = self._resolve_node_anchor_points(nodes, node_anchor_points)
                 if node_points:
                     points = node_points
-                    point_source = "nif_node"
-            elif not points and nodes and target_is_formid:
-                point_source = "node_only_formid"
+                    point_source = "formid_node_world" if target_is_formid else "nif_node"
+                elif target_is_formid and world_context is not None:
+                    point_source = "node_only_formid_world_unresolved"
+                elif target_is_formid:
+                    point_source = "node_only_formid"
             radius_units = _estimate_entry_radius_units(entry.settings)
             label = f"{self._short_name(entry.source_file)} [{entry.entry_id[:8]}]"
             series.append(
@@ -3133,8 +3208,13 @@ class MainWindow(QMainWindow):
         nif_radius_hint: float | None = None,
         decision: Decision | None = None,
         node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
+        formid_resolution: FormIDWorldResolution | None = None,
     ) -> list[dict[str, Any]]:
-        series = self._build_anchor_series(conflict, node_anchor_points=node_anchor_points)
+        series = self._build_anchor_series(
+            conflict,
+            node_anchor_points=node_anchor_points,
+            formid_resolution=formid_resolution,
+        )
         mesh_center = _centroid(mesh_points or [])
         mesh_radius = _estimate_mesh_radius_units(mesh_points or [])
         winner_entry_ids: set[str] = set()
@@ -3206,6 +3286,8 @@ class MainWindow(QMainWindow):
     def _load_mesh_preview_for_conflict(
         self,
         conflict: Conflict,
+        *,
+        formid_resolution: FormIDWorldResolution | None = None,
     ) -> tuple[str, list[tuple[float, float, float]]]:
         if self.scan_result is None:
             self.anchor_preview.clear_mesh_points()
@@ -3214,6 +3296,29 @@ class MainWindow(QMainWindow):
             return status, []
 
         if not _is_nif_target(conflict.nif_path_canonical):
+            world_context = self._world_context_from_formid_resolution(formid_resolution)
+            if world_context and world_context.base_model_path:
+                preview = load_mesh_preview_for_nif(
+                    str(self.scan_result.mods_dir),
+                    str(self.scan_result.profile_path),
+                    world_context.base_model_path,
+                )
+                world_points = transform_local_points_to_world(preview.points, world_context)
+                self.anchor_preview.set_mesh_points(world_points)
+                if preview.status == "ok":
+                    status = (
+                        f"{world_context.base_model_path} | {preview.detail} | "
+                        "transformed with winning REFR/ACHR world transform"
+                    )
+                    self.anchor_preview.set_mesh_status_text(f"Mesh cloud: {len(world_points)} pts (formid world)")
+                    return status, world_points
+                status = (
+                    f"{world_context.base_model_path} | {preview.status}: {preview.detail} | "
+                    "formid world preview"
+                )
+                self.anchor_preview.set_mesh_status_text(f"Mesh cloud: {preview.status} (formid world)")
+                return status, world_points
+
             self.anchor_preview.clear_mesh_points()
             status = "preview unavailable (LP JSON FormID targets do not include mesh path data)"
             self.anchor_preview.set_mesh_status_text("Mesh cloud: n/a (no mesh information in LP JSON)")
@@ -3249,6 +3354,8 @@ class MainWindow(QMainWindow):
     def _load_nif_node_anchor_points_for_conflict(
         self,
         conflict: Conflict,
+        *,
+        formid_resolution: FormIDWorldResolution | None = None,
     ) -> tuple[dict[str, tuple[float, float, float]], str]:
         requested_nodes = sorted(
             {
@@ -3261,16 +3368,37 @@ class MainWindow(QMainWindow):
             return ({}, "")
         if self.scan_result is None:
             return ({}, "NIF node anchors: unavailable (no scan result).")
-        if not _is_nif_target(conflict.nif_path_canonical):
-            return ({}, "NIF node anchors: unavailable for formID target.")
 
-        node_positions, detail = load_nif_node_positions_for_nif(
-            str(self.scan_result.mods_dir),
-            str(self.scan_result.profile_path),
-            conflict.nif_path_canonical,
-        )
+        detail = ""
+        status_prefix = "NIF node anchors"
+        node_positions: dict[str, tuple[float, float, float]] = {}
+        if _is_nif_target(conflict.nif_path_canonical):
+            node_positions, detail = load_nif_node_positions_for_nif(
+                str(self.scan_result.mods_dir),
+                str(self.scan_result.profile_path),
+                conflict.nif_path_canonical,
+            )
+            status_prefix = "NIF node anchors"
+        else:
+            world_context = self._world_context_from_formid_resolution(formid_resolution)
+            if world_context is None:
+                return ({}, "FormID node anchors: unavailable (world preview inactive or unresolved).")
+            if not world_context.base_model_path:
+                return ({}, "FormID node anchors: unavailable (base model path not resolved).")
+            model_positions, detail = load_nif_node_positions_for_nif(
+                str(self.scan_result.mods_dir),
+                str(self.scan_result.profile_path),
+                world_context.base_model_path,
+            )
+            node_positions = {
+                name: transformed[0]
+                for name, point in model_positions.items()
+                if (transformed := transform_local_points_to_world([point], world_context))
+            }
+            status_prefix = "FormID node anchors"
+
         if not node_positions:
-            return ({}, f"NIF node anchors: resolved 0/{len(requested_nodes)} ({detail}).")
+            return ({}, f"{status_prefix}: resolved 0/{len(requested_nodes)} ({detail}).")
 
         canonical: dict[str, tuple[float, float, float]] = {}
         alias_map: dict[str, tuple[float, float, float]] = {}
@@ -3296,7 +3424,7 @@ class MainWindow(QMainWindow):
                 continue
             resolved[node] = point
 
-        status = f"NIF node anchors: resolved {len(resolved)}/{len(requested_nodes)} ({detail})."
+        status = f"{status_prefix}: resolved {len(resolved)}/{len(requested_nodes)} ({detail})."
         if unresolved:
             preview = ", ".join(unresolved[:4])
             if len(unresolved) > 4:
@@ -3309,8 +3437,14 @@ class MainWindow(QMainWindow):
         conflict: Conflict,
         threshold: float = 14.0,
         node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
+        formid_resolution: FormIDWorldResolution | None = None,
     ) -> str:
-        series = self._build_anchor_series(conflict, node_anchor_points=node_anchor_points)
+        world_context = self._world_context_from_formid_resolution(formid_resolution)
+        series = self._build_anchor_series(
+            conflict,
+            node_anchor_points=node_anchor_points,
+            formid_resolution=formid_resolution,
+        )
         if len(series) < 2:
             return "Need at least two LP entries to evaluate overlap."
 
@@ -3364,7 +3498,8 @@ class MainWindow(QMainWindow):
                     criteria_hits.append(f"radius-aware: {radius_overlap_pairs}")
                 criteria_text = " | ".join(criteria_hits) if criteria_hits else "n/a"
                 return (
-                    f"Likely stacking: {overlapping_pairs}/{pairs_with_points} LP entry pairs overlap "
+                    f"Likely stacking{' (world-space)' if world_context else ''}: "
+                    f"{overlapping_pairs}/{pairs_with_points} LP entry pairs overlap "
                     f"(fixed<= {threshold:.1f} or radius-aware). "
                     f"Hits: {criteria_text}. Minimum pair distance: {min_text}."
                 )
@@ -3379,6 +3514,11 @@ class MainWindow(QMainWindow):
             )
 
         if _is_formid_target(conflict.nif_path_canonical):
+            if world_context is not None:
+                return (
+                    "No numeric world-space XYZ points available for overlap preview. "
+                    "Entries are node-only or missing point/offset fields for this FormID target."
+                )
             return (
                 "No numeric local XYZ points available for overlap preview. "
                 "Entries are node-only or missing point/offset fields for this FormID target."
@@ -3446,8 +3586,11 @@ class MainWindow(QMainWindow):
         conflict: Conflict,
         mesh_points: list[tuple[float, float, float]] | None = None,
         node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
+        formid_resolution: FormIDWorldResolution | None = None,
     ) -> str:
-        if _is_formid_target(conflict.nif_path_canonical):
+        target_is_formid = _is_formid_target(conflict.nif_path_canonical)
+        world_context = self._world_context_from_formid_resolution(formid_resolution)
+        if target_is_formid:
             distinct_targets = {
                 entry.nif_path_canonical.strip().lower()
                 for entry in conflict.lp_entries
@@ -3459,6 +3602,8 @@ class MainWindow(QMainWindow):
         points: list[tuple[float, float, float]] = []
         for entry in conflict.lp_entries:
             entry_points = _extract_lp_anchor_points(entry.settings)
+            if target_is_formid and world_context is not None and entry_points:
+                entry_points = transform_local_points_to_world(entry_points, world_context)
             if not entry_points:
                 entry_nodes = _extract_lp_anchor_nodes(entry.settings)
                 entry_points = self._resolve_node_anchor_points(entry_nodes, node_anchor_points)
@@ -3472,7 +3617,12 @@ class MainWindow(QMainWindow):
             elif mesh_center is not None:
                 points.append(mesh_center)
 
-        if _is_formid_target(conflict.nif_path_canonical) and len(points) < 2:
+        if target_is_formid and len(points) < 2:
+            if world_context is not None:
+                return (
+                    "Projection note: FormID world preview has insufficient numeric XYZ points; "
+                    "node-only entries cannot be projected without base model/node transform data."
+                )
             return (
                 "Projection note: FormID local preview has insufficient numeric XYZ points; "
                 "node-only entries cannot be projected without mesh/node transform data."
@@ -3495,9 +3645,11 @@ class MainWindow(QMainWindow):
         mesh_points: list[tuple[float, float, float]] | None = None,
         nif_radius_hint: float | None = None,
         node_anchor_points: dict[str, tuple[float, float, float]] | None = None,
+        formid_resolution: FormIDWorldResolution | None = None,
     ) -> str:
         lines: list[str] = []
         target_is_formid = _is_formid_target(conflict.nif_path_canonical)
+        world_context = self._world_context_from_formid_resolution(formid_resolution)
         distinct_targets = {
             entry.nif_path_canonical.strip().lower()
             for entry in conflict.lp_entries
@@ -3505,19 +3657,28 @@ class MainWindow(QMainWindow):
         }
         suppress_points = target_is_formid and len(distinct_targets) > 1
         if target_is_formid:
-            lines.append("FormID local preview mode:")
-            lines.append("- using LP JSON local points/radius only")
-            lines.append("- mesh information is not available in LP JSON")
+            if world_context is not None:
+                lines.append("FormID world preview mode:")
+                lines.append("- LP local points are transformed with winning REFR/ACHR DATA+XSCL")
+                lines.append("- base object model/node context is used when resolvable")
+                lines.append("- LP JSON itself does not include mesh information")
+            else:
+                lines.append("FormID local preview mode:")
+                lines.append("- using LP JSON local points/radius only")
+                lines.append("- mesh information is not available in LP JSON")
             if suppress_points:
                 lines.append("- XYZ drawing disabled because LP entries map to different FormID targets in this group")
             lines.append("")
         for idx, entry in enumerate(conflict.lp_entries, start=1):
-            points = _extract_lp_anchor_points(entry.settings)
+            local_points = _extract_lp_anchor_points(entry.settings)
+            points = local_points
             nodes = sorted(_extract_lp_anchor_nodes(entry.settings))
             points_from_nodes = False
             if suppress_points:
                 points = []
-            elif not points and nodes and not target_is_formid:
+            elif target_is_formid and world_context is not None and points:
+                points = transform_local_points_to_world(points, world_context)
+            elif not points and nodes:
                 node_points = self._resolve_node_anchor_points(set(nodes), node_anchor_points)
                 if node_points:
                     points = node_points
@@ -3534,13 +3695,27 @@ class MainWindow(QMainWindow):
                 formatted_points = ", ".join(f"({p[0]:.1f}, {p[1]:.1f}, {p[2]:.1f})" for p in points[:12])
                 if len(points) > 12:
                     formatted_points += f", +{len(points) - 12} more"
-                if points_from_nodes:
+                if target_is_formid and world_context is not None and local_points and not points_from_nodes:
+                    formatted_local_points = ", ".join(
+                        f"({p[0]:.1f}, {p[1]:.1f}, {p[2]:.1f})"
+                        for p in local_points[:12]
+                    )
+                    if len(local_points) > 12:
+                        formatted_local_points += f", +{len(local_points) - 12} more"
+                    lines.append(f"   points_local: {formatted_local_points}")
+                    lines.append(f"   points_world: {formatted_points} (transformed)")
+                elif points_from_nodes and target_is_formid:
+                    lines.append(f"   points: {formatted_points} (resolved from base model node transform)")
+                elif points_from_nodes:
                     lines.append(f"   points: {formatted_points} (resolved from NIF node transform)")
                 else:
                     lines.append(f"   points: {formatted_points}")
             else:
                 if target_is_formid and nodes:
-                    lines.append("   points: (unavailable - node-only entry for FormID target)")
+                    if world_context is not None:
+                        lines.append("   points: (unavailable - node-only entry and base model node transform unresolved)")
+                    else:
+                        lines.append("   points: (unavailable - node-only entry for FormID target)")
                 elif suppress_points:
                     lines.append("   points: (suppressed - mixed FormID targets)")
                 else:
