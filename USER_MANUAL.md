@@ -21,6 +21,11 @@ python -m lp_resolver.gui
 If you still test the Windows `.exe` under Proton, set `Start in` to the app folder and enable logs with:
 `PROTON_LOG=1 QT_DEBUG_PLUGINS=1 %command%`
 
+Windows packaged build note:
+
+- The app is `onedir`: keep `LPConflictResolver.exe` and the sibling `_internal` folder together.
+- Do not copy/move only the `.exe` file; Qt DLL loading will fail.
+
 ---
 
 ## 1. What This Tool Does

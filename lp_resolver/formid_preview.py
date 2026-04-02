@@ -638,8 +638,16 @@ def resolve_formid_world_resolution(
             context=None,
         )
 
+    raw_form_id = parsed[1]
+    lookup_form_id = raw_form_id & 0x00FFFFFF
+    normalized_form_id_note = ""
+    if lookup_form_id != raw_form_id:
+        normalized_form_id_note = (
+            f" Input FormID contained load-order bits; using local record id 0x{lookup_form_id:X} for lookup."
+        )
+
     canonical_target = canonical_form_id(
-        f"0x{parsed[1]:X}~{parsed[0]}"
+        f"0x{lookup_form_id:X}~{parsed[0]}"
     )
     if canonical_target is None:
         return FormIDWorldResolution(
@@ -656,6 +664,20 @@ def resolve_formid_world_resolution(
             detail=(
                 "No active plugin load order could be resolved from profile plugins.txt/loadorder.txt. "
                 "If base-game plugins are not discoverable, set LPRESOLVER_GAME_DATA_DIR to the game's Data folder."
+                f"{normalized_form_id_note}"
+                f"{source_issue_suffix}"
+            ),
+            context=None,
+        )
+
+    active_plugins = {plugin_name for plugin_name, _ in plugin_sources}
+    if parsed[0] not in active_plugins:
+        return FormIDWorldResolution(
+            status="plugin_not_active",
+            detail=(
+                f"Target plugin '{parsed[0]}' is not active in current plugins.txt/loadorder.txt. "
+                "Using LP local preview only."
+                f"{normalized_form_id_note}"
                 f"{source_issue_suffix}"
             ),
             context=None,
@@ -669,6 +691,7 @@ def resolve_formid_world_resolution(
                 "Winning REFR/ACHR record for this FormID was not found in active plugin order. "
                 "Using LP local preview only (entries may represent different placed instances)."
                 " If base-game plugins are not discoverable, set LPRESOLVER_GAME_DATA_DIR to the game's Data folder."
+                f"{normalized_form_id_note}"
                 f"{source_issue_suffix}"
             ),
             context=None,
@@ -676,7 +699,11 @@ def resolve_formid_world_resolution(
     if reference.position is None or reference.rotation_deg is None:
         return FormIDWorldResolution(
             status="reference_missing_data",
-            detail=f"Winning {reference.record_type} record is missing DATA position/rotation fields.{source_issue_suffix}",
+            detail=(
+                f"Winning {reference.record_type} record is missing DATA position/rotation fields."
+                f"{normalized_form_id_note}"
+                f"{source_issue_suffix}"
+            ),
             context=None,
         )
 
@@ -715,6 +742,8 @@ def resolve_formid_world_resolution(
         detail_parts.append("model=missing")
     if source_issue:
         detail_parts.append(f"source_warning={source_issue}")
+    if normalized_form_id_note:
+        detail_parts.append(normalized_form_id_note.strip())
     return FormIDWorldResolution(
         status="ok",
         detail=", ".join(detail_parts),

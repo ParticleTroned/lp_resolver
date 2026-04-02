@@ -65,8 +65,17 @@ try:
         QSlider,
     )
 except Exception as exc:  # noqa: BLE001
+    detail = f"{type(exc).__name__}: {exc}"
+    if getattr(sys, "frozen", False):
+        raise RuntimeError(
+            "PySide6/Qt runtime could not be loaded from the packaged app. "
+            "Ensure the full extracted app folder is present (including _internal\\PySide6 and plugins\\platforms) "
+            "and run LPConflictResolver.exe from that folder. "
+            f"Details: {detail}"
+        ) from exc
     raise RuntimeError(
-        "PySide6 is required for GUI mode. Install with: pip install pyside6"
+        "PySide6 is required for GUI mode. Install with: pip install pyside6. "
+        f"Details: {detail}"
     ) from exc
 
 

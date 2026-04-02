@@ -161,6 +161,21 @@ def _canonical_effect_id(effect_id: str | None) -> str | None:
     return f"effectid:{lowered}"
 
 
+def _fallback_effect_id_from_form_id_candidate(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    # Keep strict FormID validation for canonical `0x...~plugin` values.
+    if "~" in text:
+        return None
+    # Only promote clearly symbolic IDs (EditorID-like strings), not numeric typos.
+    if not any(ch.isalpha() for ch in text):
+        return None
+    return _canonical_effect_id(text)
+
+
 def _looks_like_light_payload(node: Mapping[str, Any]) -> bool:
     for key in node.keys():
         key_l = str(key).lower()
@@ -233,6 +248,7 @@ class LightPlacerAdapter:
             return entries, issues
 
         seen: set[tuple[str, str]] = set()
+        formid_editorid_fallbacks: set[str] = set()
         for node in _iter_dict_nodes(root):
             nif_candidates = _extract_direct_nif_candidates(node)
             form_id_candidates = _extract_direct_form_id_candidates(node)
@@ -287,15 +303,19 @@ class LightPlacerAdapter:
             for raw_form_id in sorted(form_id_candidates):
                 canonical = canonical_form_id(raw_form_id)
                 if canonical is None:
-                    issues.append(
-                        ParseIssue(
-                            severity="warn",
-                            message=f"Invalid FormID target '{raw_form_id}'",
-                            source_file=candidate.relative_path,
-                            source_mod=candidate.mod_name,
+                    fallback = _fallback_effect_id_from_form_id_candidate(raw_form_id)
+                    if fallback is None:
+                        issues.append(
+                            ParseIssue(
+                                severity="warn",
+                                message=f"Invalid FormID target '{raw_form_id}'",
+                                source_file=candidate.relative_path,
+                                source_mod=candidate.mod_name,
+                            )
                         )
-                    )
-                    continue
+                        continue
+                    canonical = fallback
+                    formid_editorid_fallbacks.add(raw_form_id.strip())
 
                 sig = value_signature(settings)
                 dedupe_key = (canonical, sig)
@@ -357,6 +377,23 @@ class LightPlacerAdapter:
                         full_payload=dict(node),
                     )
                 )
+
+        if formid_editorid_fallbacks:
+            preview_values = sorted(value for value in formid_editorid_fallbacks if value)
+            preview_text = ", ".join(preview_values[:4])
+            if len(preview_values) > 4:
+                preview_text += f", +{len(preview_values) - 4} more"
+            issues.append(
+                ParseIssue(
+                    severity="info",
+                    message=(
+                        "Detected symbolic values under formID/formIDs and treated them as effect-ID targets "
+                        f"(compatibility fallback): {preview_text}"
+                    ),
+                    source_file=candidate.relative_path,
+                    source_mod=candidate.mod_name,
+                )
+            )
 
         if likely_lp_path and not entries:
             if root_has_lp_hints:
