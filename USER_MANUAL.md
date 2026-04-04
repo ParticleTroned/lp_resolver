@@ -204,6 +204,7 @@ If screenshots are not available yet, keep these image links as placeholders and
 `FormID LP Preview`
 
 - ON (default): tries to resolve winning REFR/ACHR world transform and shows world-space FormID preview when possible.
+- Resolution runs in background; while it resolves, local LP preview remains visible.
 - OFF: keeps FormID preview in LP-local coordinates only.
 
 `Hide unresolved FormID local-only duplicates`
@@ -342,6 +343,11 @@ Tip:
 - The resolver did not find a winning REFR/ACHR record for that FormID in active plugin order.
 - Preview falls back to LP-local points/radius only; treat overlap results as uncertain.
 - If your game Data folder is not auto-detected, set `LPRESOLVER_GAME_DATA_DIR` to that folder path before launching the app.
+
+`FormID world preview: resolving ... in background`
+
+- The app is still resolving winning REFR/ACHR world data for that target.
+- Local LP preview is shown immediately; world-space preview updates automatically when ready.
 
 `Uncertain (local-only FormID)`
 

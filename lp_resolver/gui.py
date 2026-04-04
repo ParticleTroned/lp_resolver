@@ -1024,6 +1024,35 @@ class ScanWorker(QObject):
             self.failed.emit(self.scan_id, message)
 
 
+class FormIDResolutionWorker(QObject):
+    finished = Signal(int, str, object)
+    failed = Signal(int, str, str)
+
+    def __init__(self, mods_dir: str, profile_path: str, target_key: str, request_id: int) -> None:
+        super().__init__()
+        self.mods_dir = mods_dir
+        self.profile_path = profile_path
+        self.target_key = target_key
+        self.request_id = request_id
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = resolve_formid_world_resolution(
+                self.mods_dir,
+                self.profile_path,
+                self.target_key,
+            )
+            self.finished.emit(self.request_id, self.target_key, result)
+        except Exception as exc:  # noqa: BLE001
+            message = str(exc).strip()
+            if not message:
+                message = type(exc).__name__
+            elif not message.lower().startswith(type(exc).__name__.lower()):
+                message = f"{type(exc).__name__}: {message}"
+            self.failed.emit(self.request_id, self.target_key, message)
+
+
 class MainWindow(QMainWindow):
     _DUPLICATE_CONFLICT_TYPES: set[str] = {
         "duplicate_exact",
@@ -1074,6 +1103,11 @@ class MainWindow(QMainWindow):
         self._conflict_by_nif: dict[str, Conflict] = {}
         self._worker_thread: QThread | None = None
         self._worker: ScanWorker | None = None
+        self._formid_worker_thread: QThread | None = None
+        self._formid_worker: FormIDResolutionWorker | None = None
+        self._formid_request_seq = 0
+        self._formid_request_inflight_target: str | None = None
+        self._formid_request_pending_target: str | None = None
         self._active_scan_id = 0
         self._scan_in_progress = False
         self._updating_conflicts_table = False
@@ -1273,6 +1307,8 @@ class MainWindow(QMainWindow):
 
     def _on_formid_preview_options_changed(self, *_args) -> None:
         self._save_persistent_paths()
+        if not self.formid_preview_enabled_cb.isChecked():
+            self._formid_request_pending_target = None
         if self.scan_result is not None:
             self.on_conflict_selection_changed()
 
@@ -1561,7 +1597,7 @@ class MainWindow(QMainWindow):
             "These are overlapping anchors with mutually exclusive worldspace conditions\n"
             "(for example interior vs exterior variants), so they usually do not stack simultaneously."
         )
-        self.formid_preview_enabled_cb = QCheckBox("FormID LP Preview (Experimental)")
+        self.formid_preview_enabled_cb = QCheckBox("FormID LP Preview")
         self.formid_preview_enabled_cb.setChecked(True)
         self.formid_preview_enabled_cb.setToolTip(
             "Enable world-space preview for FormID LP targets.\n"
@@ -2010,6 +2046,9 @@ class MainWindow(QMainWindow):
         self._active_scan_id += 1
         scan_id = self._active_scan_id
         clear_formid_preview_caches()
+        self._formid_request_seq += 1
+        self._formid_request_pending_target = None
+        self._formid_request_inflight_target = None
         self._scan_in_progress = True
         self.scan_btn.setEnabled(False)
         self.scan_result = None
@@ -2110,6 +2149,20 @@ class MainWindow(QMainWindow):
                     self,
                     "Scan In Progress",
                     "A scan is still running. Please wait for it to finish, then close again.",
+                )
+                self._is_closing = False
+                self.scan_btn.setEnabled(not self._scan_in_progress)
+                self.conflicts_table.setEnabled(not self._scan_in_progress)
+                event.ignore()
+                return
+        formid_thread = self._formid_worker_thread
+        if formid_thread is not None and formid_thread.isRunning():
+            formid_thread.quit()
+            if not formid_thread.wait(30000):
+                QMessageBox.warning(
+                    self,
+                    "FormID Preview Busy",
+                    "FormID world preview is still resolving. Please wait for it to finish, then close again.",
                 )
                 self._is_closing = False
                 self.scan_btn.setEnabled(not self._scan_in_progress)
@@ -2601,25 +2654,112 @@ class MainWindow(QMainWindow):
         else:
             self._entry_selection_by_nif.pop(conflict.nif_path_canonical, None)
 
-    def _formid_world_resolution_for_target(self, target_key: str) -> FormIDWorldResolution | None:
+    def _queue_formid_world_resolution(self, target_key: str) -> None:
         if not _is_formid_target(target_key):
-            return None
+            return
         if self.scan_result is None:
-            return None
-        cached = self._formid_world_resolution_cache.get(target_key)
-        if cached is not None:
-            return cached
-        try:
-            resolution = resolve_formid_world_resolution(
-                str(self.scan_result.mods_dir),
-                str(self.scan_result.profile_path),
-                target_key,
+            return
+        if target_key in self._formid_world_resolution_cache:
+            return
+        if self._formid_request_inflight_target == target_key:
+            return
+        # Keep only the most recent requested target to avoid long background queues.
+        self._formid_request_pending_target = target_key
+        self._start_next_formid_resolution_request()
+
+    def _start_next_formid_resolution_request(self) -> None:
+        if self.scan_result is None or self._is_closing:
+            return
+        if self._formid_worker_thread is not None and self._formid_worker_thread.isRunning():
+            return
+        target_key = self._formid_request_pending_target
+        self._formid_request_pending_target = None
+        if target_key in self._formid_world_resolution_cache:
+            return
+        if not target_key:
+            return
+
+        self._formid_request_seq += 1
+        request_id = self._formid_request_seq
+        worker = FormIDResolutionWorker(
+            str(self.scan_result.mods_dir),
+            str(self.scan_result.profile_path),
+            target_key,
+            request_id,
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self.on_formid_resolution_finished)
+        worker.failed.connect(self.on_formid_resolution_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(self._on_formid_resolution_thread_finished)
+        thread.finished.connect(thread.deleteLater)
+
+        self._formid_request_inflight_target = target_key
+        self._formid_worker = worker
+        self._formid_worker_thread = thread
+        thread.start()
+
+    @Slot(int, str, object)
+    def on_formid_resolution_finished(self, request_id: int, target_key: str, result: object) -> None:
+        if self._is_closing:
+            return
+        if request_id != self._formid_request_seq:
+            return
+
+        if isinstance(result, FormIDWorldResolution):
+            resolution = result
+        else:
+            resolution = FormIDWorldResolution(
+                status="error",
+                detail="Unexpected FormID resolver result payload.",
+                context=None,
             )
-        except Exception as exc:  # noqa: BLE001
-            detail = self._error_detail_line(str(exc))
-            resolution = FormIDWorldResolution(status="error", detail=detail, context=None)
+        self._apply_formid_resolution_result(target_key, resolution)
+
+    @Slot(int, str, str)
+    def on_formid_resolution_failed(self, request_id: int, target_key: str, error_text: str) -> None:
+        if self._is_closing:
+            return
+        if request_id != self._formid_request_seq:
+            return
+
+        resolution = FormIDWorldResolution(
+            status="error",
+            detail=self._error_detail_line(error_text),
+            context=None,
+        )
+        self._apply_formid_resolution_result(target_key, resolution)
+
+    def _apply_formid_resolution_result(self, target_key: str, resolution: FormIDWorldResolution) -> None:
         self._formid_world_resolution_cache[target_key] = resolution
-        return resolution
+        self._formid_request_inflight_target = None
+
+        if self.scan_result is not None and self.hide_unresolved_formid_local_duplicates_cb.isChecked():
+            selected_nifs = self._selected_nif_paths()
+            self._populate_conflicts_table(preserve_nif_paths=selected_nifs)
+            self.summary_label.setText(self._build_scan_summary_text(self.scan_result))
+
+        selected = self._selected_conflict()
+        if (
+            selected is not None
+            and selected.nif_path_canonical == target_key
+            and self.formid_preview_enabled_cb.isChecked()
+            and not self._scan_in_progress
+            and not self._updating_conflicts_table
+        ):
+            self.on_conflict_selection_changed()
+
+    @Slot()
+    def _on_formid_resolution_thread_finished(self) -> None:
+        self._formid_worker = None
+        self._formid_worker_thread = None
+        self._formid_request_inflight_target = None
+        self._start_next_formid_resolution_request()
 
     def _is_duplicate_only_conflict(self, conflict: Conflict) -> bool:
         types = set(conflict.conflict_types)
@@ -2630,7 +2770,7 @@ class MainWindow(QMainWindow):
             return False
         if not self._is_duplicate_only_conflict(conflict):
             return False
-        resolution = self._formid_world_resolution_for_target(conflict.nif_path_canonical)
+        resolution = self._formid_world_resolution_cache.get(conflict.nif_path_canonical)
         if resolution is None:
             return False
         return resolution.status != "ok"
@@ -2657,9 +2797,10 @@ class MainWindow(QMainWindow):
         if self.scan_result is None:
             return (None, "FormID world preview: unavailable (no scan result).")
 
-        resolution = self._formid_world_resolution_for_target(conflict.nif_path_canonical)
+        resolution = self._formid_world_resolution_cache.get(conflict.nif_path_canonical)
         if resolution is None:
-            return (None, "FormID world preview: unavailable (target is not FormID or no scan result).")
+            self._queue_formid_world_resolution(conflict.nif_path_canonical)
+            return (None, "FormID world preview: resolving winning REFR/ACHR in background (local preview shown).")
         if resolution.status == "ok":
             return (resolution, f"FormID world preview: active ({resolution.detail}).")
         return (resolution, f"FormID world preview: {resolution.status} ({resolution.detail}).")
