@@ -1895,6 +1895,12 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.light_scale_menu_btn, 3, 2)
         grid.addWidget(QLabel("Light Source"), 4, 0)
         grid.addWidget(self.pl_source_combo, 4, 1)
+        theme_cell = QVBoxLayout()
+        theme_cell.setContentsMargins(0, 0, 0, 0)
+        theme_cell.setSpacing(2)
+        theme_cell.addWidget(QLabel("Theme"))
+        theme_cell.addWidget(self.theme_mode_combo)
+        grid.addLayout(theme_cell, 4, 2)
 
         filter_row_primary = QHBoxLayout()
         filter_row_primary.addWidget(self.only_overlap_cb)
@@ -1910,9 +1916,6 @@ class MainWindow(QMainWindow):
         filter_row_secondary = QHBoxLayout()
         filter_row_secondary.addWidget(self.formid_preview_enabled_cb)
         filter_row_secondary.addWidget(self.hide_unresolved_formid_local_duplicates_cb)
-        filter_row_secondary.addSpacing(12)
-        filter_row_secondary.addWidget(QLabel("Theme"))
-        filter_row_secondary.addWidget(self.theme_mode_combo)
         filter_row_secondary.addStretch(1)
         grid.addLayout(filter_row_secondary, 6, 0, 1, 3)
 
