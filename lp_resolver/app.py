@@ -36,16 +36,26 @@ def _verify_frozen_qt_runtime_layout() -> None:
         return
     exe_dir = Path(sys.executable).resolve().parent
     required_paths = [
+        exe_dir / "_internal" / "python3.dll",
         exe_dir / "_internal" / "PySide6" / "QtCore.pyd",
         exe_dir / "_internal" / "PySide6" / "Qt6Core.dll",
+        exe_dir / "_internal" / "PySide6" / "pyside6.abi3.dll",
+        exe_dir / "_internal" / "shiboken6" / "Shiboken.pyd",
         exe_dir / "_internal" / "PySide6" / "plugins" / "platforms" / "qwindows.dll",
     ]
     missing = [str(path) for path in required_paths if not path.exists()]
+    has_embedded_python = any(
+        dll.name.lower().startswith("python3") and dll.suffix.lower() == ".dll"
+        for dll in (exe_dir / "_internal").glob("python3*.dll")
+    )
+    if not has_embedded_python:
+        missing.append(str(exe_dir / "_internal" / "python3*.dll"))
     if not missing:
         return
     raise RuntimeError(
-        "Packaged runtime is incomplete (missing Qt files).\n"
+        "Packaged runtime is incomplete (missing bundled runtime files).\n"
         "Run LPConflictResolver.exe from the extracted app folder and keep the _internal directory next to it.\n"
+        "If files disappear after install/extract, check antivirus/quarantine rules.\n"
         f"Missing files: {', '.join(missing)}"
     )
 
