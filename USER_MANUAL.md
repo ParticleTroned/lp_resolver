@@ -81,6 +81,7 @@ Vortex priority note (important):
 - Vortex profile path example: `C:\Users\<user>\AppData\Roaming\Vortex\skyrimse\profiles\<ProfileId>` and should contain `plugins.txt` and `loadorder.txt`.
 4. Keep defaults for first scan:
 - `Light Source: Both`
+- `Theme: Auto`
 - `Overlap Only`: OFF
 - `Include Refinements`: OFF
 - `Include Worldspace Splits`: OFF
@@ -206,6 +207,12 @@ If screenshots are not available yet, keep these image links as placeholders and
 - ON (default): tries to resolve winning REFR/ACHR world transform and shows world-space FormID preview when possible.
 - Resolution runs in background; while it resolves, local LP preview remains visible.
 - OFF: keeps FormID preview in LP-local coordinates only.
+
+`Theme`
+
+- `Auto` (default): follows desktop light/dark preference.
+- `Light`: forces light UI theme.
+- `Dark`: forces dark UI theme.
 
 `Hide unresolved FormID local-only duplicates`
 

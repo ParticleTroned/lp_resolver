@@ -35,7 +35,7 @@ from .priority import choose_keep_highest_entry, entry_priority_sort_key
 
 try:
     from PySide6.QtCore import QItemSelectionModel, QObject, QPointF, QSettings, Qt, QThread, QUrl, Signal, Slot
-    from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPainterPath, QPen, QTextOption
+    from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QPainter, QPainterPath, QPalette, QPen, QTextOption
     from PySide6.QtWidgets import (
         QAbstractItemView,
         QApplication,
@@ -79,35 +79,102 @@ except Exception as exc:  # noqa: BLE001
     ) from exc
 
 
-UI_STYLESHEET = """
+_UI_THEME_COLORS: dict[str, dict[str, str]] = {
+    "light": {
+        "widget_bg": "#eef2f7",
+        "widget_text": "#1f2a37",
+        "main_bg": "#e8edf5",
+        "group_border": "#c7d2e3",
+        "group_bg": "#f7f9fc",
+        "group_title_text": "#1f3a5f",
+        "input_bg": "#ffffff",
+        "input_border": "#b9c7db",
+        "selection_bg": "#2d6cdf",
+        "selection_text": "#ffffff",
+        "combo_drop_border": "#b9c7db",
+        "combo_drop_bg": "#e3ebf9",
+        "button_bg": "#2d6cdf",
+        "button_text": "#ffffff",
+        "button_border": "#2458b4",
+        "button_hover_bg": "#3b7bf2",
+        "button_pressed_bg": "#244f9c",
+        "button_disabled_bg": "#9fb4d8",
+        "button_disabled_text": "#eef3fb",
+        "header_bg": "#dde7f5",
+        "header_text": "#1f2a37",
+        "header_border": "#c4d0e4",
+        "table_grid": "#d3dceb",
+        "table_alt_bg": "#f5f8fd",
+        "checkbox_text": "#1f2a37",
+        "splitter_marker": "#111111",
+        "tooltip_bg": "#1f2a37",
+        "tooltip_text": "#f8fafc",
+        "tooltip_border": "#4b5f7a",
+        "note_text": "#4b5f7a",
+    },
+    "dark": {
+        "widget_bg": "#1d242e",
+        "widget_text": "#e8eff9",
+        "main_bg": "#161c24",
+        "group_border": "#46556d",
+        "group_bg": "#242d39",
+        "group_title_text": "#dbe7f8",
+        "input_bg": "#1a2029",
+        "input_border": "#55657f",
+        "selection_bg": "#4a86e8",
+        "selection_text": "#ffffff",
+        "combo_drop_border": "#55657f",
+        "combo_drop_bg": "#2b3748",
+        "button_bg": "#3f7ee0",
+        "button_text": "#ffffff",
+        "button_border": "#2f64b2",
+        "button_hover_bg": "#4d8ded",
+        "button_pressed_bg": "#2f64b2",
+        "button_disabled_bg": "#52647f",
+        "button_disabled_text": "#d1dceb",
+        "header_bg": "#2a3444",
+        "header_text": "#e8eff9",
+        "header_border": "#55657f",
+        "table_grid": "#3d4b61",
+        "table_alt_bg": "#212b37",
+        "checkbox_text": "#e8eff9",
+        "splitter_marker": "#d8e5f8",
+        "tooltip_bg": "#0f141b",
+        "tooltip_text": "#f8fafc",
+        "tooltip_border": "#7188aa",
+        "note_text": "#adc2df",
+    },
+}
+
+_UI_STYLESHEET_TEMPLATE = """
 QWidget {
-    background-color: #eef2f7;
-    color: #1f2a37;
+    background-color: @widget_bg@;
+    color: @widget_text@;
     font-size: 13px;
 }
 QMainWindow {
-    background-color: #e8edf5;
+    background-color: @main_bg@;
 }
 QGroupBox {
-    border: 1px solid #c7d2e3;
+    border: 1px solid @group_border@;
     border-radius: 8px;
     margin-top: 12px;
     padding-top: 8px;
-    background-color: #f7f9fc;
+    background-color: @group_bg@;
     font-weight: 600;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
     left: 10px;
     padding: 0 4px;
-    color: #1f3a5f;
+    color: @group_title_text@;
 }
 QLineEdit, QTextEdit, QComboBox, QListWidget, QTableWidget {
-    background-color: #ffffff;
-    border: 1px solid #b9c7db;
+    background-color: @input_bg@;
+    border: 1px solid @input_border@;
     border-radius: 4px;
-    selection-background-color: #2d6cdf;
-    selection-color: #ffffff;
+    selection-background-color: @selection_bg@;
+    selection-color: @selection_text@;
 }
 QComboBox {
     padding-right: 26px;
@@ -116,8 +183,8 @@ QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
     width: 22px;
-    border-left: 1px solid #b9c7db;
-    background-color: #e3ebf9;
+    border-left: 1px solid @combo_drop_border@;
+    background-color: @combo_drop_bg@;
     border-top-right-radius: 4px;
     border-bottom-right-radius: 4px;
 }
@@ -127,42 +194,42 @@ QComboBox::down-arrow {
     height: 0px;
 }
 QComboBox QAbstractItemView {
-    background-color: #ffffff;
-    border: 1px solid #b9c7db;
-    selection-background-color: #2d6cdf;
-    selection-color: #ffffff;
+    background-color: @input_bg@;
+    border: 1px solid @input_border@;
+    selection-background-color: @selection_bg@;
+    selection-color: @selection_text@;
 }
 QPushButton {
-    background-color: #2d6cdf;
-    color: #ffffff;
-    border: 1px solid #2458b4;
+    background-color: @button_bg@;
+    color: @button_text@;
+    border: 1px solid @button_border@;
     border-radius: 5px;
     padding: 4px 10px;
 }
 QPushButton:hover {
-    background-color: #3b7bf2;
+    background-color: @button_hover_bg@;
 }
 QPushButton:pressed {
-    background-color: #244f9c;
+    background-color: @button_pressed_bg@;
 }
 QPushButton:disabled {
-    background-color: #9fb4d8;
-    color: #eef3fb;
+    background-color: @button_disabled_bg@;
+    color: @button_disabled_text@;
 }
 QHeaderView::section {
-    background-color: #dde7f5;
-    color: #1f2a37;
-    border: 1px solid #c4d0e4;
+    background-color: @header_bg@;
+    color: @header_text@;
+    border: 1px solid @header_border@;
     padding: 4px;
     font-weight: 600;
 }
 QTableWidget {
-    gridline-color: #d3dceb;
-    alternate-background-color: #f5f8fd;
+    gridline-color: @table_grid@;
+    alternate-background-color: @table_alt_bg@;
 }
 QCheckBox {
     spacing: 6px;
-    color: #1f2a37;
+    color: @checkbox_text@;
 }
 QCheckBox::indicator {
     width: 14px;
@@ -183,21 +250,83 @@ QSplitter::handle:horizontal {
     margin: 0px;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                                 stop:0 transparent, stop:0.46 transparent,
-                                stop:0.5 #111111, stop:0.54 transparent, stop:1 transparent);
+                                stop:0.5 @splitter_marker@, stop:0.54 transparent, stop:1 transparent);
 }
 QSplitter::handle:vertical {
     height: 8px;
     margin: 0px;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                                 stop:0 transparent, stop:0.46 transparent,
-                                stop:0.5 #111111, stop:0.54 transparent, stop:1 transparent);
+                                stop:0.5 @splitter_marker@, stop:0.54 transparent, stop:1 transparent);
 }
 QToolTip {
-    background-color: #1f2a37;
-    color: #f8fafc;
-    border: 1px solid #4b5f7a;
+    background-color: @tooltip_bg@;
+    color: @tooltip_text@;
+    border: 1px solid @tooltip_border@;
+}
+QLabel#lightScaleNoteLabel {
+    color: @note_text@;
+    font-size: 12px;
 }
 """
+
+_UI_STYLESHEET_CACHE: dict[str, str] = {}
+
+
+def _normalize_theme_mode(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"auto", "light", "dark"}:
+        return normalized
+    return "auto"
+
+
+def _system_prefers_dark_theme() -> bool:
+    app = QGuiApplication.instance()
+    if app is None:
+        return False
+
+    try:
+        hints = app.styleHints()
+        color_scheme_fn = getattr(hints, "colorScheme", None)
+        if callable(color_scheme_fn):
+            scheme = color_scheme_fn()
+            color_scheme_enum = getattr(Qt, "ColorScheme", None)
+            if color_scheme_enum is not None:
+                if scheme == color_scheme_enum.Dark:
+                    return True
+                if scheme == color_scheme_enum.Light:
+                    return False
+    except Exception:  # noqa: BLE001
+        pass
+
+    return app.palette().color(QPalette.ColorRole.Window).lightness() < 128
+
+
+def _resolve_theme_variant(theme_mode: str | None) -> str:
+    mode = _normalize_theme_mode(theme_mode)
+    if mode == "light":
+        return "light"
+    if mode == "dark":
+        return "dark"
+    return "dark" if _system_prefers_dark_theme() else "light"
+
+
+def _build_ui_stylesheet(theme_variant: str) -> str:
+    colors = _UI_THEME_COLORS.get(theme_variant, _UI_THEME_COLORS["light"])
+    stylesheet = _UI_STYLESHEET_TEMPLATE
+    for name, value in colors.items():
+        stylesheet = stylesheet.replace(f"@{name}@", value)
+    return stylesheet
+
+
+def _stylesheet_for_theme_variant(theme_variant: str) -> str:
+    key = theme_variant if theme_variant in _UI_THEME_COLORS else "light"
+    cached = _UI_STYLESHEET_CACHE.get(key)
+    if cached is not None:
+        return cached
+    built = _build_ui_stylesheet(key)
+    _UI_STYLESHEET_CACHE[key] = built
+    return built
 
 
 def _as_xyz(value: Any) -> tuple[float, float, float] | None:
@@ -455,14 +584,15 @@ def _estimate_mesh_radius_units(points: list[tuple[float, float, float]]) -> flo
 
 
 class DropDownComboBox(QComboBox):
-    """Combo box with an explicit blue down-triangle indicator."""
+    """Combo box with a palette-aware down-triangle indicator."""
 
     def paintEvent(self, event) -> None:  # noqa: N802
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#2d6cdf") if self.isEnabled() else QColor("#9fb4d8"))
+        role = QPalette.ColorRole.Highlight if self.isEnabled() else QPalette.ColorRole.Mid
+        painter.setBrush(self.palette().color(role))
 
         rect = self.rect()
         center_x = rect.right() - 11
@@ -504,7 +634,7 @@ class AnchorPreviewWidget(QWidget):
             "Left plot: X/Y (top view), right plot: X/Z (side view).\n"
             "Each color corresponds to one entry/target.\n"
             "Legend tags: [LP] = Light Placer entry, [PL] = Particle Light target.\n"
-            "Bold black legend text marks the currently selected winner entry/target.\n"
+            "Bold legend text marks the currently selected winner entry/target.\n"
             "Radius halos use one shared XY/XZ scale derived from current anchor view.\n"
             "Very large halos are proportionally downscaled for readability while preserving ratios.\n"
             "Axis ranges prioritize anchor points when available (mesh overlay does not force range flattening).\n"
@@ -996,7 +1126,12 @@ class AnchorPreviewWidget(QWidget):
             winner_font = painter.font()
             winner_font.setBold(bool(is_winner))
             painter.setFont(winner_font)
-            painter.setPen(QColor(0, 0, 0) if is_winner else self.palette().text().color())
+            if is_winner:
+                plot_bg_lightness = self.palette().color(QPalette.ColorRole.Base).lightness()
+                winner_color = QColor(0, 0, 0) if plot_bg_lightness >= 128 else QColor(255, 255, 255)
+                painter.setPen(winner_color)
+            else:
+                painter.setPen(self.palette().text().color())
             painter.drawText(text_x + 16, legend_top + row * legend_row_h + 12, text)
         painter.setFont(base_font)
 
@@ -1112,11 +1247,13 @@ class MainWindow(QMainWindow):
         self._scan_in_progress = False
         self._updating_conflicts_table = False
         self._is_closing = False
+        self._system_theme_signal_connected = False
         self._conflict_min_widths = [72, 64, 72, 32, 32, 72]
         self._light_scale_menu: QMenu | None = None
         self._formid_world_resolution_cache: dict[str, FormIDWorldResolution] = {}
 
         self._build_ui()
+        self._connect_system_theme_notifications()
         self._load_persistent_paths()
 
     def _build_ui(self) -> None:
@@ -1256,7 +1393,7 @@ class MainWindow(QMainWindow):
             "Place it after your conflict patch and other LP JSON providers."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color: #4b5f7a; font-size: 12px;")
+        note.setObjectName("lightScaleNoteLabel")
         menu_layout.addWidget(note)
 
         action = QWidgetAction(self._light_scale_menu)
@@ -1320,6 +1457,46 @@ class MainWindow(QMainWindow):
         self._populate_conflicts_table(preserve_nif_paths=selected_nifs)
         self.summary_label.setText(self._build_scan_summary_text(self.scan_result))
 
+    def _connect_system_theme_notifications(self) -> None:
+        if self._system_theme_signal_connected:
+            return
+        app = QGuiApplication.instance()
+        if app is None:
+            return
+        color_scheme_changed = getattr(app.styleHints(), "colorSchemeChanged", None)
+        if color_scheme_changed is None:
+            return
+        try:
+            color_scheme_changed.connect(self._on_system_color_scheme_changed)
+            self._system_theme_signal_connected = True
+        except Exception:  # noqa: BLE001
+            return
+
+    def _theme_mode(self) -> str:
+        if hasattr(self, "theme_mode_combo"):
+            return _normalize_theme_mode(str(self.theme_mode_combo.currentData() or "auto"))
+        return "auto"
+
+    def _apply_theme_stylesheet(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        theme_variant = _resolve_theme_variant(self._theme_mode())
+        current_variant = str(app.property("_lp_theme_variant") or "")
+        if current_variant == theme_variant:
+            return
+        app.setStyleSheet(_stylesheet_for_theme_variant(theme_variant))
+        app.setProperty("_lp_theme_variant", theme_variant)
+
+    def _on_theme_mode_changed(self, *_args) -> None:
+        self._fit_combo_to_current_text(self.theme_mode_combo, extra_padding_px=48)
+        self._apply_theme_stylesheet()
+        self._save_persistent_paths()
+
+    def _on_system_color_scheme_changed(self, *_args) -> None:
+        if self._theme_mode() == "auto":
+            self._apply_theme_stylesheet()
+
     def _light_scale_config(self) -> LightIntensityPatchConfig:
         return LightIntensityPatchConfig(
             scale_factor=self._light_scale_factor(),
@@ -1349,6 +1526,7 @@ class MainWindow(QMainWindow):
         hide_unresolved_formid_local = bool(
             settings.value("filters/hide_unresolved_formid_local_duplicates", True, bool)
         )
+        theme_mode = _normalize_theme_mode(settings.value("ui/theme_mode", "auto", str))
 
         if mo2_root:
             self.mo2_root_edit.setText(mo2_root)
@@ -1368,7 +1546,16 @@ class MainWindow(QMainWindow):
         self.light_scale_portal_strict_cb.setChecked(light_scale_portal_strict_only)
         self.formid_preview_enabled_cb.setChecked(formid_preview_enabled)
         self.hide_unresolved_formid_local_duplicates_cb.setChecked(hide_unresolved_formid_local)
+        theme_index = self.theme_mode_combo.findData(theme_mode)
+        if theme_index < 0:
+            theme_index = self.theme_mode_combo.findData("auto")
+        previous_block_state = self.theme_mode_combo.blockSignals(True)
+        if theme_index >= 0:
+            self.theme_mode_combo.setCurrentIndex(theme_index)
+        self.theme_mode_combo.blockSignals(previous_block_state)
+        self._fit_combo_to_current_text(self.theme_mode_combo, extra_padding_px=48)
         self._refresh_light_scale_button()
+        self._apply_theme_stylesheet()
 
         self._ensure_output_dir_exists(self._resolve_output_dir_text(self.output_dir_edit.text().strip()))
 
@@ -1390,6 +1577,8 @@ class MainWindow(QMainWindow):
                 "filters/hide_unresolved_formid_local_duplicates",
                 self.hide_unresolved_formid_local_duplicates_cb.isChecked(),
             )
+        if hasattr(self, "theme_mode_combo"):
+            settings.setValue("ui/theme_mode", self._theme_mode())
         settings.sync()
 
     def _resolve_output_dir_text(self, output_dir_text: str) -> Path:
@@ -1612,6 +1801,19 @@ class MainWindow(QMainWindow):
             "These entries are local-only overlap estimates and can represent different placed instances."
         )
         self.hide_unresolved_formid_local_duplicates_cb.toggled.connect(self._on_conflict_visibility_options_changed)
+        self.theme_mode_combo = DropDownComboBox()
+        self.theme_mode_combo.addItem("Auto", "auto")
+        self.theme_mode_combo.addItem("Light", "light")
+        self.theme_mode_combo.addItem("Dark", "dark")
+        self.theme_mode_combo.setToolTip(
+            "UI theme mode:\n"
+            "- Auto: follow desktop light/dark preference\n"
+            "- Light: force light theme\n"
+            "- Dark: force dark theme"
+        )
+        self._mark_as_dropdown(self.theme_mode_combo)
+        self._fit_combo_to_current_text(self.theme_mode_combo, extra_padding_px=48)
+        self.theme_mode_combo.currentIndexChanged.connect(self._on_theme_mode_changed)
 
         browse_mo2_btn = QPushButton("Browse")
         browse_profile_btn = QPushButton("Browse")
@@ -1708,6 +1910,9 @@ class MainWindow(QMainWindow):
         filter_row_secondary = QHBoxLayout()
         filter_row_secondary.addWidget(self.formid_preview_enabled_cb)
         filter_row_secondary.addWidget(self.hide_unresolved_formid_local_duplicates_cb)
+        filter_row_secondary.addSpacing(12)
+        filter_row_secondary.addWidget(QLabel("Theme"))
+        filter_row_secondary.addWidget(self.theme_mode_combo)
         filter_row_secondary.addStretch(1)
         grid.addLayout(filter_row_secondary, 6, 0, 1, 3)
 
@@ -1822,7 +2027,7 @@ class MainWindow(QMainWindow):
             "Note: Keep Highest is not quality-aware; it only follows priority/tie-break order.\n"
             "Vortex note: Keep Highest currently cannot determine priority order reliably from Vortex lists.\n"
             "For Vortex profiles, review results manually before exporting.\n"
-            "Anchor Preview legend: winner entry/target is shown in bold black text."
+            "Anchor Preview legend: winner entry/target is shown in bold text."
         )
         self._mark_as_dropdown(self.action_combo)
         self.action_combo.currentTextChanged.connect(lambda _: self._fit_combo_to_current_text(self.action_combo))
@@ -1891,7 +2096,7 @@ class MainWindow(QMainWindow):
             "- Left: X/Y top view\n"
             "- Right: X/Z side view\n"
             "- Colored circles: LP/PL anchors, radius drawn to true relative scale from LP/PL radius values.\n"
-            "- Bold black legend text marks the winner selected by current decision.\n"
+            "- Bold legend text marks the winner selected by current decision.\n"
             "- PL targets without explicit points use mesh centroid as coarse estimate.\n"
             "Use this to verify likely overlap vs disjoint refinement."
         )
@@ -4177,7 +4382,10 @@ class MainWindow(QMainWindow):
 def main() -> int:
     app = QApplication([])
     app.setApplicationName("Placed Lights and Particle Lights Conflict Resolver")
-    app.setStyleSheet(UI_STYLESHEET)
+    startup_theme_mode = _normalize_theme_mode(QSettings("ParticleTroned", "LPConflictResolver").value("ui/theme_mode", "auto", str))
+    startup_theme_variant = _resolve_theme_variant(startup_theme_mode)
+    app.setStyleSheet(_stylesheet_for_theme_variant(startup_theme_variant))
+    app.setProperty("_lp_theme_variant", startup_theme_variant)
     window = MainWindow()
     window.show()
     return app.exec()
