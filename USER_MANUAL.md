@@ -1,5 +1,5 @@
 # Placed Lights and Particle Lights Conflict Resolver  
-Version: 0.2.0
+Version: 0.2.1
 
 This guide is for first-time users. It explains what the tool changes, how mod load order affects results (MO2 or Vortex), and how to export a safe patch.
 
@@ -106,13 +106,19 @@ Vortex priority note (important):
 - `Disable LP for PL overlaps`
 - `Keep Highest For All Duplicates`
 11. Repeat for conflicts you care about.
-12. Click `Export Patch`.
-13. Optional: click `Light Scale` (next to `Patch Mod Name`) and enable `Enable Separate Intensity Patch (Experimental)`:
+12. Click `Export Patch` to write the conflict patch.
+13. Optional: click `Inventory` (directly below `Light Scale`) to open the inventory filter window and export CSV + JSON audit files.
+14. Optional for patch mode: click `Light Scale` (next to `Patch Mod Name`) and enable `Enable Separate Intensity Patch (Experimental)`:
 - scale slider: `0.50` to `2.00` (`1.00` keeps current values)
 - scope: `All Entries`, `Interior Only`, or `Exterior Only`
 - optional `PortalStrict only` filter
-14. If enabled, LP Resolver exports `<Patch Mod Name>_LightIntensityPatch` after the conflict patch.
-15. Ensure patch priority is highest so overrides win:
+15. Inventory export writes these files to `Output Dir`:
+- `resolver_inventory.json`
+- `resolver_inventory_targets.csv`
+- `resolver_inventory_lp_entries.csv`
+- `resolver_inventory_pl_targets.csv`
+16. If Light Scale is enabled, LP Resolver exports `<Patch Mod Name>_LightIntensityPatch` after the conflict patch.
+17. Ensure patch priority is highest so overrides win:
 - MO2: place `<Patch Mod Name>_LightIntensityPatch` after `<Patch Mod Name>` and after other LightPlacer JSON providers.
 - Vortex: set both patches to highest deploy/conflict priority, with `_LightIntensityPatch` winning last.
 
@@ -230,6 +236,14 @@ If screenshots are not available yet, keep these image links as placeholders and
 - Writes to `<Patch Mod Name>_LightIntensityPatch`.
 - `PortalStrict` meaning: this flag marks lights intended to behave more strictly with room/portal-style boundaries (commonly interior-focused behavior with less bleed across spaces).  
   In LP Resolver, this is read from entry flag data and used for filtering/prioritization only.
+
+`Inventory` button
+
+- Located in `Scan And Output`, directly below `Light Scale`.
+- Opens a filter window, then exports audit files (`CSV + JSON`) to `Output Dir`.
+- Scope filter: `All`, `Interior`, `Exterior` (applies to LP entries and PL rows by matching target keys).
+- `PortalStrict (LP only)`: include only LP entries detected as PortalStrict.
+- `NIF targets only (LP + PL)`: include only NIF target keys that contain LP and/or PL light data.
 
 ---
 

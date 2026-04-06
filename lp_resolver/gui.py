@@ -28,6 +28,7 @@ from .formid_preview import (
     resolve_formid_world_resolution,
     transform_local_points_to_world,
 )
+from .inventory_writer import InventoryExportConfig, InventoryExportResult, write_inventory_reports
 from .models import Conflict
 from .nif_preview import load_mesh_preview_for_nif, load_nif_bounding_radius_for_nif, load_nif_node_positions_for_nif
 from .patch_writer import LightIntensityPatchConfig, write_light_intensity_patch_mod, write_patch_mod
@@ -41,6 +42,8 @@ try:
         QApplication,
         QCheckBox,
         QComboBox,
+        QDialog,
+        QDialogButtonBox,
         QFileDialog,
         QGridLayout,
         QGroupBox,
@@ -1251,6 +1254,9 @@ class MainWindow(QMainWindow):
         self._conflict_min_widths = [72, 64, 72, 32, 32, 72]
         self._light_scale_menu: QMenu | None = None
         self._formid_world_resolution_cache: dict[str, FormIDWorldResolution] = {}
+        self._inventory_scope = "all"
+        self._inventory_portal_strict_only = False
+        self._inventory_nif_only = False
 
         self._build_ui()
         self._connect_system_theme_notifications()
@@ -1415,6 +1421,87 @@ class MainWindow(QMainWindow):
         anchor = self.light_scale_menu_btn.mapToGlobal(self.light_scale_menu_btn.rect().bottomLeft())
         self._light_scale_menu.popup(anchor)
 
+    def _inventory_export_config(self) -> InventoryExportConfig:
+        return InventoryExportConfig(
+            worldspace_scope=self._inventory_scope,
+            portal_strict_only=self._inventory_portal_strict_only,
+            nif_only=self._inventory_nif_only,
+        )
+
+    def _show_inventory_filter_dialog(self) -> bool:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Export Inventory")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(440)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        header = QLabel(
+            "Select inventory filters. Scope applies to LP entries and PL rows by matching target keys."
+        )
+        header.setWordWrap(True)
+        layout.addWidget(header)
+
+        scope_row = QHBoxLayout()
+        scope_row.setContentsMargins(0, 0, 0, 0)
+        scope_row.setSpacing(8)
+        scope_row.addWidget(QLabel("Scope"))
+        scope_combo = DropDownComboBox()
+        scope_combo.addItem("All", "all")
+        scope_combo.addItem("Interior", "interior")
+        scope_combo.addItem("Exterior", "exterior")
+        self._mark_as_dropdown(scope_combo)
+        scope_index = scope_combo.findData(self._inventory_scope)
+        if scope_index < 0:
+            scope_index = scope_combo.findData("all")
+        if scope_index >= 0:
+            scope_combo.setCurrentIndex(scope_index)
+        scope_row.addWidget(scope_combo, 1)
+        layout.addLayout(scope_row)
+
+        portal_strict_cb = QCheckBox("PortalStrict (LP only)")
+        portal_strict_cb.setChecked(self._inventory_portal_strict_only)
+        portal_strict_cb.setToolTip(
+            "Include only LP entries detected as PortalStrict.\n"
+            "This filter applies to LP entries only."
+        )
+        layout.addWidget(portal_strict_cb)
+
+        nif_only_cb = QCheckBox("NIF targets only (LP + PL)")
+        nif_only_cb.setChecked(self._inventory_nif_only)
+        nif_only_cb.setToolTip(
+            "Include only NIF target keys.\n"
+            "When enabled, FormID/EffectID targets are excluded."
+        )
+        layout.addWidget(nif_only_cb)
+
+        note = QLabel(
+            "Output files:\n"
+            "- resolver_inventory.json\n"
+            "- resolver_inventory_targets.csv\n"
+            "- resolver_inventory_lp_entries.csv\n"
+            "- resolver_inventory_pl_targets.csv"
+        )
+        note.setWordWrap(True)
+        note.setObjectName("lightScaleNoteLabel")
+        layout.addWidget(note)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return False
+
+        self._inventory_scope = str(scope_combo.currentData() or "all")
+        self._inventory_portal_strict_only = portal_strict_cb.isChecked()
+        self._inventory_nif_only = nif_only_cb.isChecked()
+        self._save_persistent_paths()
+        return True
+
     def _light_scale_factor(self) -> float:
         return float(self.light_scale_slider.value()) / 100.0
 
@@ -1522,6 +1609,15 @@ class MainWindow(QMainWindow):
         light_scale_slider_value = int(settings.value("light_scale/slider_value", 100, int))
         light_scale_scope = settings.value("light_scale/scope", "all", str).strip().lower()
         light_scale_portal_strict_only = bool(settings.value("light_scale/portal_strict_only", False, bool))
+        inventory_scope = settings.value("inventory/scope", "all", str).strip().lower()
+        inventory_portal_strict_only = bool(settings.value("inventory/portal_strict_only", False, bool))
+        inventory_nif_only = bool(
+            settings.value(
+                "inventory/nif_only",
+                settings.value("inventory/nifs_with_pl_only", False, bool),
+                bool,
+            )
+        )
         formid_preview_enabled = bool(settings.value("preview/formid_world_enabled", True, bool))
         hide_unresolved_formid_local = bool(
             settings.value("filters/hide_unresolved_formid_local_duplicates", True, bool)
@@ -1544,6 +1640,11 @@ class MainWindow(QMainWindow):
         if scope_index >= 0:
             self.light_scale_scope_combo.setCurrentIndex(scope_index)
         self.light_scale_portal_strict_cb.setChecked(light_scale_portal_strict_only)
+        if inventory_scope not in {"all", "interior", "exterior"}:
+            inventory_scope = "all"
+        self._inventory_scope = inventory_scope
+        self._inventory_portal_strict_only = inventory_portal_strict_only
+        self._inventory_nif_only = inventory_nif_only
         self.formid_preview_enabled_cb.setChecked(formid_preview_enabled)
         self.hide_unresolved_formid_local_duplicates_cb.setChecked(hide_unresolved_formid_local)
         theme_index = self.theme_mode_combo.findData(theme_mode)
@@ -1570,6 +1671,9 @@ class MainWindow(QMainWindow):
             settings.setValue("light_scale/slider_value", int(self.light_scale_slider.value()))
             settings.setValue("light_scale/scope", str(self.light_scale_scope_combo.currentData() or "all"))
             settings.setValue("light_scale/portal_strict_only", self.light_scale_portal_strict_cb.isChecked())
+        settings.setValue("inventory/scope", self._inventory_scope)
+        settings.setValue("inventory/portal_strict_only", self._inventory_portal_strict_only)
+        settings.setValue("inventory/nif_only", self._inventory_nif_only)
         if hasattr(self, "formid_preview_enabled_cb"):
             settings.setValue("preview/formid_world_enabled", self.formid_preview_enabled_cb.isChecked())
         if hasattr(self, "hide_unresolved_formid_local_duplicates_cb"):
@@ -1834,12 +1938,12 @@ class MainWindow(QMainWindow):
 
         load_decisions_btn = QPushButton("Load Decisions")
         save_decisions_btn = QPushButton("Save Decisions")
-        export_patch_btn = QPushButton("Export Patch")
+        self.export_patch_btn = QPushButton("Export Patch")
         clear_all_decisions_btn = QPushButton("Clear All Decisions")
         load_decisions_btn.setToolTip("Load resolver decisions from JSON.")
         clear_all_decisions_btn.setToolTip("Remove all currently stored decisions from this session.")
         save_decisions_btn.setToolTip("Save current decisions to JSON.")
-        export_patch_btn.setToolTip(
+        self.export_patch_btn.setToolTip(
             "Generate patch mod JSON from current decisions.\n"
             "Writes overrides at original LightPlacer source paths under MO2 mods/<PatchName>/\n"
             "so MO2 last-wins behavior applies.\n"
@@ -1852,8 +1956,14 @@ class MainWindow(QMainWindow):
         )
         load_decisions_btn.clicked.connect(self.load_decisions_from_disk)
         save_decisions_btn.clicked.connect(self.save_decisions_to_disk)
-        export_patch_btn.clicked.connect(self.export_patch_mod)
+        self.export_patch_btn.clicked.connect(self.export_patch_mod)
         clear_all_decisions_btn.clicked.connect(self.clear_all_decisions)
+        self.inventory_export_btn = QPushButton("Inventory")
+        self.inventory_export_btn.setToolTip(
+            "Export inventory as CSV + JSON.\n"
+            "Click to open filter window (Interior/Exterior, PortalStrict, NIF only)."
+        )
+        self.inventory_export_btn.clicked.connect(self.export_inventory_reports)
 
         apply_overlap_disable_btn = QPushButton("Disable LP for PL overlaps")
         apply_overlap_disable_btn.clicked.connect(self.apply_disable_for_all_overlaps)
@@ -1895,12 +2005,7 @@ class MainWindow(QMainWindow):
         grid.addWidget(self.light_scale_menu_btn, 3, 2)
         grid.addWidget(QLabel("Light Source"), 4, 0)
         grid.addWidget(self.pl_source_combo, 4, 1)
-        theme_cell = QVBoxLayout()
-        theme_cell.setContentsMargins(0, 0, 0, 0)
-        theme_cell.setSpacing(2)
-        theme_cell.addWidget(QLabel("Theme"))
-        theme_cell.addWidget(self.theme_mode_combo)
-        grid.addLayout(theme_cell, 4, 2)
+        grid.addWidget(self.inventory_export_btn, 4, 2)
 
         filter_row_primary = QHBoxLayout()
         filter_row_primary.addWidget(self.only_overlap_cb)
@@ -1909,11 +2014,18 @@ class MainWindow(QMainWindow):
         filter_row_primary.addSpacing(12)
         filter_row_primary.addWidget(self.cross_mod_duplicates_cb)
         filter_row_primary.addWidget(self.ignore_duplicate_exact_cb)
-        filter_row_primary.addWidget(self.include_overridden_files_cb)
         filter_row_primary.addStretch(1)
-        grid.addLayout(filter_row_primary, 5, 0, 1, 3)
+        grid.addLayout(filter_row_primary, 5, 0, 1, 2)
+
+        theme_cell = QVBoxLayout()
+        theme_cell.setContentsMargins(0, 0, 0, 0)
+        theme_cell.setSpacing(2)
+        theme_cell.addWidget(QLabel("Theme"))
+        theme_cell.addWidget(self.theme_mode_combo)
+        grid.addLayout(theme_cell, 5, 2, 1, 1, Qt.AlignRight)
 
         filter_row_secondary = QHBoxLayout()
+        filter_row_secondary.addWidget(self.include_overridden_files_cb)
         filter_row_secondary.addWidget(self.formid_preview_enabled_cb)
         filter_row_secondary.addWidget(self.hide_unresolved_formid_local_duplicates_cb)
         filter_row_secondary.addStretch(1)
@@ -1923,7 +2035,8 @@ class MainWindow(QMainWindow):
             self.scan_btn,
             load_decisions_btn,
             save_decisions_btn,
-            export_patch_btn,
+            self.export_patch_btn,
+            self.inventory_export_btn,
             clear_all_decisions_btn,
             apply_overlap_disable_btn,
             apply_highest_duplicates_btn,
@@ -1935,7 +2048,7 @@ class MainWindow(QMainWindow):
         button_row_primary.addWidget(self.scan_btn)
         button_row_primary.addWidget(load_decisions_btn)
         button_row_primary.addWidget(save_decisions_btn)
-        button_row_primary.addWidget(export_patch_btn)
+        button_row_primary.addWidget(self.export_patch_btn)
         button_row_primary.addWidget(clear_all_decisions_btn)
         button_row_primary.addWidget(apply_overlap_disable_btn)
         button_row_primary.addWidget(apply_highest_duplicates_btn)
@@ -4315,24 +4428,8 @@ class MainWindow(QMainWindow):
                 ),
             )
 
-    def export_patch_mod(self) -> None:
-        if self.scan_result is None:
-            QMessageBox.warning(self, "Export Patch", "Run scan first.")
-            return
-        patch_name = self.patch_name_edit.text().strip() or "LP_ConflictPatch"
-        try:
-            result = write_patch_mod(self.scan_result, self.decisions, patch_mod_name=patch_name)
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(
-                self,
-                "Export Patch",
-                self._format_file_io_error_message(
-                    "Patch export failed.",
-                    str(exc),
-                ),
-            )
-            return
-
+    def _export_patch_outputs(self, patch_name: str):
+        result = write_patch_mod(self.scan_result, self.decisions, patch_mod_name=patch_name)
         light_scale_result = None
         if self.light_scale_enabled_cb.isChecked():
             light_scale_patch_name = f"{patch_name}_LightIntensityPatch"
@@ -4344,16 +4441,84 @@ class MainWindow(QMainWindow):
                     patch_mod_name=light_scale_patch_name,
                 )
             except Exception as exc:  # noqa: BLE001
-                QMessageBox.critical(
-                    self,
-                    "Export Patch",
-                    self._format_file_io_error_message(
-                        "Conflict patch was exported, but light intensity patch export failed.\n\n"
-                        f"Conflict patch dir: {result.patch_mod_dir}",
-                        str(exc),
-                    ),
-                )
+                raise RuntimeError(
+                    "Conflict patch was exported, but light intensity patch export failed.\n\n"
+                    f"Conflict patch dir: {result.patch_mod_dir}\n\n"
+                    f"Details: {exc}"
+                ) from exc
+        return result, light_scale_result
+
+    def _export_inventory_outputs(self) -> InventoryExportResult:
+        output_dir = self._resolve_output_dir_text(self.output_dir_edit.text().strip())
+        output_dir_error = self._ensure_output_dir_exists(output_dir)
+        if output_dir_error:
+            raise RuntimeError(f"Output Dir is not writable: {output_dir} ({output_dir_error})")
+        return write_inventory_reports(
+            self.scan_result,
+            output_dir,
+            config=self._inventory_export_config(),
+        )
+
+    def export_inventory_reports(self) -> None:
+        if self.scan_result is None:
+            QMessageBox.warning(self, "Export Inventory", "Run scan first.")
+            return
+        if not self._show_inventory_filter_dialog():
+            return
+        try:
+            result = self._export_inventory_outputs()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                "Export Inventory",
+                self._format_file_io_error_message(
+                    "Inventory export failed.",
+                    str(exc),
+                ),
+            )
+            return
+
+        filters = result.filter_summary
+        QMessageBox.information(
+            self,
+            "Export Inventory",
+            (
+                "Inventory export written to:\n"
+                f"{result.output_dir}\n\n"
+                f"JSON: {result.json_path}\n"
+                f"Targets CSV: {result.target_csv_path}\n"
+                f"LP Entries CSV: {result.lp_csv_path}\n"
+                f"PL Targets CSV: {result.pl_csv_path}\n\n"
+                f"Targets exported: {result.exported_target_count}\n"
+                f"LP entries exported: {result.exported_lp_entry_count}\n"
+                f"PL targets exported: {result.exported_pl_target_count}\n"
+                f"Filters: scope={filters.get('worldspace_scope')}, "
+                f"portalStrictOnly={filters.get('portal_strict_only')}, "
+                f"nifOnly={filters.get('nif_only')}"
+            ),
+        )
+
+    def export_patch_mod(self) -> None:
+        if self.scan_result is None:
+            QMessageBox.warning(self, "Export Patch", "Run scan first.")
+            return
+        patch_name = self.patch_name_edit.text().strip() or "LP_ConflictPatch"
+        try:
+            result, light_scale_result = self._export_patch_outputs(patch_name)
+        except Exception as exc:  # noqa: BLE001
+            message_text = str(exc).strip()
+            if message_text.startswith("Conflict patch was exported, but light intensity patch export failed."):
+                QMessageBox.critical(self, "Export Patch", message_text)
                 return
+            QMessageBox.critical(
+                self,
+                "Export Patch",
+                self._format_file_io_error_message(
+                    "Patch export failed.",
+                    str(exc),
+                ),
+            )
+            return
 
         message = (
             f"Conflict patch written to:\n{result.patch_mod_dir}\n\n"
