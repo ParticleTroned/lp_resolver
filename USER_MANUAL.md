@@ -97,7 +97,7 @@ Vortex priority note (important):
 8. Choose decision in `Action`:
 - `Ignore`
 - `Keep Highest` (order: MO2 position, PortalStrict for divergent same-worldspace, radius, fade, source_mod, source_file, entry_id)
-- `Choose Entries` (supports selecting multiple LP entries to keep)
+- `Choose Entries` (multi-select in `LP Entries`: `Ctrl` click toggles individual rows, `Shift` click selects a range, drag selection also works)
 - `Disable LP`
   Vortex: prefer `Choose Entries` / `Disable LP` manual review instead of relying on `Keep Highest`.
 9. Click `Apply To Selected`.
@@ -140,6 +140,7 @@ Each row is one target-key conflict group:
 ### C) Details And Decisions panel
 
 Use `Action` + `LP Entries` selection list, then apply decision.  
+For `Choose Entries`, select one or more entries with `Ctrl` click (toggle), `Shift` click (range), or drag-select.
 Anchor preview visualizes approximate overlap and radius relation.
 Batch decision helper buttons are available for fast baseline cleanup.
 
@@ -227,6 +228,8 @@ If screenshots are not available yet, keep these image links as placeholders and
 - Scope filter: `All Entries`, `Interior Only`, `Exterior Only` (uses `GetInWorldspace ... == 0/1` conditions).
 - `PortalStrict only`: additional filter on top of scope.
 - Writes to `<Patch Mod Name>_LightIntensityPatch`.
+- `PortalStrict` meaning: this flag marks lights intended to behave more strictly with room/portal-style boundaries (commonly interior-focused behavior with less bleed across spaces).  
+  In LP Resolver, this is read from entry flag data and used for filtering/prioritization only.
 
 ---
 
@@ -247,6 +250,11 @@ What each option does:
 - `Scale` slider (`0.50` to `2.00`): `0.50` halves supported values, `1.00` keeps values unchanged, `2.00` doubles values.
 - `Scope`: `All Entries` = no worldspace filter, `Interior Only` = scales entries with `GetInWorldspace ... == 0`, `Exterior Only` = scales entries with `GetInWorldspace ... == 1`.
 - `PortalStrict only`: only scales entries detected as PortalStrict; can be combined with any scope.
+
+PortalStrict note:
+
+- `PortalStrict` is a placed-light flag that indicates stricter portal/room-bound behavior (typically used for interior-style lights).
+- LP Resolver detects it from the LP entry flag fields and uses it as a filter/tie-break signal; it does not change game-side light logic by itself.
 
 Important behavior:
 
