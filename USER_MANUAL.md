@@ -113,10 +113,10 @@ Vortex priority note (important):
 - scope: `All Entries`, `Interior Only`, or `Exterior Only`
 - optional `PortalStrict only` filter
 15. Result export writes these files to `Output Dir`:
-- `resolver_inventory.json`
-- `resolver_inventory_targets.csv`
-- `resolver_inventory_lp_entries.csv`
-- `resolver_inventory_pl_targets.csv`
+- `Results_summary.json`
+- `Results_targets.csv`
+- `Results_lp_entries.csv`
+- `Results_pl_targets.csv`
 16. If Light Scale is enabled, LP Resolver exports `<Patch Mod Name>_LightIntensityPatch` after the conflict patch.
 17. Ensure patch priority is highest so overrides win:
 - MO2: place `<Patch Mod Name>_LightIntensityPatch` after `<Patch Mod Name>` and after other LightPlacer JSON providers.
@@ -245,6 +245,7 @@ If screenshots are not available yet, keep these image links as placeholders and
 - Scope filter: `All`, `Interior`, `Exterior` (applies to LP entries and PL rows by matching target keys).
 - `PortalStrict (LP only)`: include only LP entries detected as PortalStrict.
 - `NIF targets only (LP + PL)`: include only NIF target keys that contain LP and/or PL light data.
+- `Conflicts only`: export only LP/PL rows whose target keys are currently detected as conflicts.
 
 ---
 

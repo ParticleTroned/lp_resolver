@@ -27,6 +27,7 @@ class InventoryExportConfig:
     worldspace_scope: str = "all"
     portal_strict_only: bool = False
     nif_only: bool = False
+    conflicts_only: bool = False
 
 
 @dataclass
@@ -256,16 +257,18 @@ def write_inventory_reports(
     output_dir: Path,
     *,
     config: InventoryExportConfig | None = None,
-    file_prefix: str = "resolver_inventory",
+    file_prefix: str = "Results",
 ) -> InventoryExportResult:
     cfg = config or InventoryExportConfig()
     worldspace_scope = _normalize_worldspace_scope(cfg.worldspace_scope)
     portal_strict_only = bool(cfg.portal_strict_only)
     nif_only = bool(cfg.nif_only)
+    conflicts_only = bool(cfg.conflicts_only)
 
     output_dir = output_dir.expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    conflict_types_by_target = _build_conflict_types_by_target(scan_result)
     pl_target_keys_all = {target.nif_path_canonical for target in scan_result.pl_targets}
     filtered_lp_entries = _filter_lp_entries(
         scan_result.lp_entries,
@@ -285,7 +288,6 @@ def write_inventory_reports(
     )
 
     pl_target_keys_filtered = {target.nif_path_canonical for target in filtered_pl_targets}
-    conflict_types_by_target = _build_conflict_types_by_target(scan_result)
 
     lp_rows: list[dict[str, Any]] = []
     for entry in sorted(
@@ -300,6 +302,8 @@ def write_inventory_reports(
         ),
     ):
         conflict_types = sorted(conflict_types_by_target.get(entry.nif_path_canonical, set()))
+        if conflicts_only and not conflict_types:
+            continue
         lp_rows.append(
             {
                 "target_key": entry.nif_path_canonical,
@@ -329,6 +333,8 @@ def write_inventory_reports(
         ),
     ):
         conflict_types = sorted(conflict_types_by_target.get(target.nif_path_canonical, set()))
+        if conflicts_only and not conflict_types:
+            continue
         pl_rows.append(
             {
                 "target_key": target.nif_path_canonical,
@@ -388,6 +394,7 @@ def write_inventory_reports(
             "worldspace_scope": worldspace_scope,
             "portal_strict_only": portal_strict_only,
             "nif_only": nif_only,
+            "conflicts_only": conflicts_only,
         },
         "summary": {
             "lp_entries_total": len(scan_result.lp_entries),
@@ -451,7 +458,7 @@ def write_inventory_reports(
         ],
     }
 
-    json_path = output_dir / f"{file_prefix}.json"
+    json_path = output_dir / f"{file_prefix}_summary.json"
     target_csv_path = output_dir / f"{file_prefix}_targets.csv"
     lp_csv_path = output_dir / f"{file_prefix}_lp_entries.csv"
     pl_csv_path = output_dir / f"{file_prefix}_pl_targets.csv"
@@ -474,5 +481,6 @@ def write_inventory_reports(
             "worldspace_scope": worldspace_scope,
             "portal_strict_only": portal_strict_only,
             "nif_only": nif_only,
+            "conflicts_only": conflicts_only,
         },
     )

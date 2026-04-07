@@ -1355,6 +1355,7 @@ class MainWindow(QMainWindow):
         self._inventory_scope = "all"
         self._inventory_portal_strict_only = False
         self._inventory_nif_only = False
+        self._inventory_conflicts_only = False
 
         self._build_ui()
         self._connect_system_theme_notifications()
@@ -1539,6 +1540,7 @@ class MainWindow(QMainWindow):
             worldspace_scope=self._inventory_scope,
             portal_strict_only=self._inventory_portal_strict_only,
             nif_only=self._inventory_nif_only,
+            conflicts_only=self._inventory_conflicts_only,
         )
 
     def _show_inventory_filter_dialog(self) -> bool:
@@ -1590,12 +1592,20 @@ class MainWindow(QMainWindow):
         )
         layout.addWidget(nif_only_cb)
 
+        conflicts_only_cb = QCheckBox("Conflicts only")
+        conflicts_only_cb.setChecked(self._inventory_conflicts_only)
+        conflicts_only_cb.setToolTip(
+            "Include only rows whose target key is currently detected as a conflict.\n"
+            "Non-conflicting LP/PL findings are excluded."
+        )
+        layout.addWidget(conflicts_only_cb)
+
         note = QLabel(
             "Output files:\n"
-            "- resolver_inventory.json\n"
-            "- resolver_inventory_targets.csv\n"
-            "- resolver_inventory_lp_entries.csv\n"
-            "- resolver_inventory_pl_targets.csv"
+            "- Results_summary.json\n"
+            "- Results_targets.csv\n"
+            "- Results_lp_entries.csv\n"
+            "- Results_pl_targets.csv"
         )
         note.setWordWrap(True)
         note.setObjectName("lightScaleNoteLabel")
@@ -1612,6 +1622,7 @@ class MainWindow(QMainWindow):
         self._inventory_scope = str(scope_combo.currentData() or "all")
         self._inventory_portal_strict_only = portal_strict_cb.isChecked()
         self._inventory_nif_only = nif_only_cb.isChecked()
+        self._inventory_conflicts_only = conflicts_only_cb.isChecked()
         self._save_persistent_paths()
         return True
 
@@ -1731,6 +1742,7 @@ class MainWindow(QMainWindow):
                 bool,
             )
         )
+        inventory_conflicts_only = bool(settings.value("inventory/conflicts_only", False, bool))
         formid_preview_enabled = bool(settings.value("preview/formid_world_enabled", True, bool))
         hide_unresolved_formid_local = bool(
             settings.value("filters/hide_unresolved_formid_local_duplicates", True, bool)
@@ -1758,6 +1770,7 @@ class MainWindow(QMainWindow):
         self._inventory_scope = inventory_scope
         self._inventory_portal_strict_only = inventory_portal_strict_only
         self._inventory_nif_only = inventory_nif_only
+        self._inventory_conflicts_only = inventory_conflicts_only
         self.formid_preview_enabled_cb.setChecked(formid_preview_enabled)
         self.hide_unresolved_formid_local_duplicates_cb.setChecked(hide_unresolved_formid_local)
         theme_index = self.theme_mode_combo.findData(theme_mode)
@@ -1787,6 +1800,7 @@ class MainWindow(QMainWindow):
         settings.setValue("inventory/scope", self._inventory_scope)
         settings.setValue("inventory/portal_strict_only", self._inventory_portal_strict_only)
         settings.setValue("inventory/nif_only", self._inventory_nif_only)
+        settings.setValue("inventory/conflicts_only", self._inventory_conflicts_only)
         if hasattr(self, "formid_preview_enabled_cb"):
             settings.setValue("preview/formid_world_enabled", self.formid_preview_enabled_cb.isChecked())
         if hasattr(self, "hide_unresolved_formid_local_duplicates_cb"):
@@ -2273,8 +2287,8 @@ class MainWindow(QMainWindow):
         self.entry_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.entry_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.entry_list.setMinimumWidth(220)
-        self.entry_list.setMinimumHeight(86)
-        self.entry_list.setMaximumHeight(124)
+        self.entry_list.setMinimumHeight(48)
+        self.entry_list.setMaximumHeight(48)
         self.entry_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.entry_list.itemSelectionChanged.connect(self._on_entry_selection_changed)
 
@@ -2306,8 +2320,8 @@ class MainWindow(QMainWindow):
         decision_layout.setSpacing(6)
         decision_layout.addLayout(decision_top_grid)
         decision_layout.addLayout(decision_buttons_row)
-        self.details_decision_widget.setMinimumHeight(146)
-        self.details_decision_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.details_decision_widget.setMinimumHeight(0)
+        self.details_decision_widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
 
         self.detail_text = QTextEdit()
         self.detail_text.setReadOnly(True)
@@ -2383,6 +2397,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.details_decision_widget)
         layout.addWidget(preview_and_text_splitter, 1)
+        self._update_entry_list_height()
         return box
 
     def _browse_directory(self, target_edit: QLineEdit) -> None:
@@ -2508,6 +2523,7 @@ class MainWindow(QMainWindow):
         self.conflicts_table.blockSignals(False)
         self.conflicts_table.setEnabled(False)
         self.entry_list.clear()
+        self._update_entry_list_height()
         worker = ScanWorker(config, scan_id)
         thread = QThread(self)
         worker.moveToThread(thread)
@@ -2908,6 +2924,44 @@ class MainWindow(QMainWindow):
         for i, width in enumerate(new_widths):
             self.conflicts_table.setColumnWidth(i, width)
 
+    def _entry_list_row_height(self) -> int:
+        if self.entry_list.count() > 0:
+            row_h = self.entry_list.sizeHintForRow(0)
+            if row_h > 0:
+                return row_h
+        return max(20, self.entry_list.fontMetrics().height() + 8)
+
+    def _update_entry_list_height(self) -> None:
+        row_h = self._entry_list_row_height()
+        row_spacing = max(0, self.entry_list.spacing())
+        row_block_h = max(1, row_h + row_spacing)
+
+        count = max(1, self.entry_list.count())
+        # Keep the decision header compact while still allowing bigger lists to expand naturally.
+        # This caps LP list growth to a portion of window height so lower panes remain usable.
+        window_height = max(480, self.height())
+        max_rows_by_window = max(3, int((window_height * 0.34) / row_block_h))
+        visible_rows = min(count, max_rows_by_window)
+
+        frame = (self.entry_list.frameWidth() * 2) + 4
+        rows_height = (visible_rows * row_h) + (max(0, visible_rows - 1) * row_spacing)
+        viewport_width = self.entry_list.viewport().width()
+        widest_item = self.entry_list.sizeHintForColumn(0)
+        needs_h_scroll = (
+            self.entry_list.count() > 0
+            and self.entry_list.horizontalScrollBarPolicy() != Qt.ScrollBarAlwaysOff
+            and (viewport_width <= 0 or widest_item > viewport_width)
+        )
+        scrollbar_height = self.entry_list.horizontalScrollBar().sizeHint().height() if needs_h_scroll else 0
+        target_height = frame + rows_height + scrollbar_height + 2
+
+        min_height = frame + row_h + scrollbar_height + 2
+        target_height = max(min_height, target_height)
+
+        self.entry_list.setMinimumHeight(target_height)
+        self.entry_list.setMaximumHeight(target_height)
+        self.details_decision_widget.updateGeometry()
+
     def _compact_details_controls(self) -> None:
         width = self.details_decision_widget.width()
         compact = width < 560
@@ -2931,7 +2985,7 @@ class MainWindow(QMainWindow):
         reserve = action_w + fm.horizontalAdvance("Action") + 40
         entry_target = max(min_floor, width - reserve)
         self.entry_list.setMinimumWidth(entry_target)
-        self.entry_list.setMaximumHeight(96 if very_compact else 124)
+        self._update_entry_list_height()
 
     def _selected_conflict(self) -> Conflict | None:
         selected = self.conflicts_table.selectedItems()
@@ -3257,6 +3311,7 @@ class MainWindow(QMainWindow):
             conflict = self._selected_conflict()
             self.entry_list.blockSignals(True)
             self.entry_list.clear()
+            self._update_entry_list_height()
             if conflict is None:
                 self.entry_list.blockSignals(False)
                 self.detail_text.setPlainText("")
@@ -3274,6 +3329,7 @@ class MainWindow(QMainWindow):
                 item.setData(Qt.UserRole, entry.entry_id)
                 item.setToolTip(f"{entry.source_mod} | {entry.source_file} | {entry.entry_id}")
                 self.entry_list.addItem(item)
+            self._update_entry_list_height()
 
             decision = self.decisions.get(conflict.nif_path_canonical)
             selected_entry_ids: list[str] = []
@@ -4589,6 +4645,7 @@ class MainWindow(QMainWindow):
             self.scan_result,
             output_dir,
             config=self._inventory_export_config(),
+            file_prefix="Results",
         )
 
     def export_inventory_reports(self) -> None:
@@ -4626,7 +4683,8 @@ class MainWindow(QMainWindow):
                 f"PL targets exported: {result.exported_pl_target_count}\n"
                 f"Filters: scope={filters.get('worldspace_scope')}, "
                 f"portalStrictOnly={filters.get('portal_strict_only')}, "
-                f"nifOnly={filters.get('nif_only')}"
+                f"nifOnly={filters.get('nif_only')}, "
+                f"conflictsOnly={filters.get('conflicts_only')}"
             ),
         )
 
