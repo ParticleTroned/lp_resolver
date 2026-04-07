@@ -107,12 +107,12 @@ Vortex priority note (important):
 - `Keep Highest For All Duplicates`
 11. Repeat for conflicts you care about.
 12. Click `Export Patch` to write the conflict patch.
-13. Optional: click `Inventory` (directly below `Light Scale`) to open the inventory filter window and export CSV + JSON audit files.
+13. Optional: click `Export Results` (directly below `Light Scale`) to open the result-export filter window and export CSV + JSON audit files.
 14. Optional for patch mode: click `Light Scale` (next to `Patch Mod Name`) and enable `Enable Separate Intensity Patch (Experimental)`:
 - scale slider: `0.50` to `2.00` (`1.00` keeps current values)
 - scope: `All Entries`, `Interior Only`, or `Exterior Only`
 - optional `PortalStrict only` filter
-15. Inventory export writes these files to `Output Dir`:
+15. Result export writes these files to `Output Dir`:
 - `resolver_inventory.json`
 - `resolver_inventory_targets.csv`
 - `resolver_inventory_lp_entries.csv`
@@ -237,9 +237,10 @@ If screenshots are not available yet, keep these image links as placeholders and
 - `PortalStrict` meaning: this flag marks lights intended to behave more strictly with room/portal-style boundaries (commonly interior-focused behavior with less bleed across spaces).  
   In LP Resolver, this is read from entry flag data and used for filtering/prioritization only.
 
-`Inventory` button
+`Export Results` button
 
 - Located in `Scan And Output`, directly below `Light Scale`.
+- Disabled until the first successful scan completes.
 - Opens a filter window, then exports audit files (`CSV + JSON`) to `Output Dir`.
 - Scope filter: `All`, `Interior`, `Exterior` (applies to LP entries and PL rows by matching target keys).
 - `PortalStrict (LP only)`: include only LP entries detected as PortalStrict.

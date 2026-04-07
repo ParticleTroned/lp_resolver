@@ -56,9 +56,11 @@ try:
         QMenu,
         QMessageBox,
         QPushButton,
+        QProxyStyle,
         QHeaderView,
         QSizePolicy,
         QSplitter,
+        QStyle,
         QTableWidget,
         QTableWidgetItem,
         QTextEdit,
@@ -109,11 +111,30 @@ _UI_THEME_COLORS: dict[str, dict[str, str]] = {
         "table_grid": "#d3dceb",
         "table_alt_bg": "#f5f8fd",
         "checkbox_text": "#1f2a37",
-        "splitter_marker": "#111111",
+        "splitter_marker": "#1b2d45",
+        "splitter_track": "#d0dbec",
+        "splitter_hover": "#bccae0",
+        "splitter_pressed": "#aabbd7",
         "tooltip_bg": "#1f2a37",
         "tooltip_text": "#f8fafc",
         "tooltip_border": "#4b5f7a",
         "note_text": "#4b5f7a",
+        "scan_button_bg": "#2f8a3b",
+        "scan_button_border": "#236a2d",
+        "scan_button_hover_bg": "#389e46",
+        "scan_button_pressed_bg": "#256f30",
+        "status_idle_bg": "#fff3c4",
+        "status_idle_border": "#d5b54a",
+        "status_idle_text": "#5d4700",
+        "status_running_bg": "#d5e8ff",
+        "status_running_border": "#6f9cd3",
+        "status_running_text": "#17395f",
+        "status_success_bg": "#d7f1dd",
+        "status_success_border": "#4f9b63",
+        "status_success_text": "#1f5d30",
+        "status_error_bg": "#f8d6d6",
+        "status_error_border": "#c36a6a",
+        "status_error_text": "#7a1f1f",
     },
     "dark": {
         "widget_bg": "#1d242e",
@@ -142,10 +163,29 @@ _UI_THEME_COLORS: dict[str, dict[str, str]] = {
         "table_alt_bg": "#212b37",
         "checkbox_text": "#e8eff9",
         "splitter_marker": "#d8e5f8",
+        "splitter_track": "#44556e",
+        "splitter_hover": "#56698a",
+        "splitter_pressed": "#6d84ab",
         "tooltip_bg": "#0f141b",
         "tooltip_text": "#f8fafc",
         "tooltip_border": "#7188aa",
         "note_text": "#adc2df",
+        "scan_button_bg": "#3f9f54",
+        "scan_button_border": "#2f7a40",
+        "scan_button_hover_bg": "#4cb764",
+        "scan_button_pressed_bg": "#348547",
+        "status_idle_bg": "#655200",
+        "status_idle_border": "#c2a63f",
+        "status_idle_text": "#ffeaa8",
+        "status_running_bg": "#1b3d62",
+        "status_running_border": "#6f9cd3",
+        "status_running_text": "#d5e9ff",
+        "status_success_bg": "#1f4a2b",
+        "status_success_border": "#63ad76",
+        "status_success_text": "#c4f1d0",
+        "status_error_bg": "#5a2424",
+        "status_error_border": "#c98787",
+        "status_error_text": "#ffd8d8",
     },
 }
 
@@ -219,6 +259,17 @@ QPushButton:disabled {
     background-color: @button_disabled_bg@;
     color: @button_disabled_text@;
 }
+QPushButton#scanActionButton {
+    background-color: @scan_button_bg@;
+    border: 1px solid @scan_button_border@;
+    font-weight: 700;
+}
+QPushButton#scanActionButton:hover {
+    background-color: @scan_button_hover_bg@;
+}
+QPushButton#scanActionButton:pressed {
+    background-color: @scan_button_pressed_bg@;
+}
 QHeaderView::section {
     background-color: @header_bg@;
     color: @header_text@;
@@ -239,28 +290,31 @@ QCheckBox::indicator {
     height: 14px;
 }
 QSplitter::handle {
-    background: transparent;
-    border: none;
+    background-color: @splitter_track@;
+    border: 1px solid @splitter_track@;
+    border-radius: 2px;
 }
 QSplitter::handle:hover {
-    background-color: rgba(0, 0, 0, 0.04);
+    background-color: @splitter_hover@;
+    border: 1px solid @splitter_hover@;
 }
 QSplitter::handle:pressed {
-    background-color: rgba(0, 0, 0, 0.08);
+    background-color: @splitter_pressed@;
+    border: 1px solid @splitter_pressed@;
 }
 QSplitter::handle:horizontal {
-    width: 8px;
+    width: 10px;
     margin: 0px;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                                stop:0 transparent, stop:0.46 transparent,
-                                stop:0.5 @splitter_marker@, stop:0.54 transparent, stop:1 transparent);
+                                stop:0 @splitter_track@, stop:0.43 @splitter_track@,
+                                stop:0.5 @splitter_marker@, stop:0.57 @splitter_track@, stop:1 @splitter_track@);
 }
 QSplitter::handle:vertical {
-    height: 8px;
+    height: 10px;
     margin: 0px;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                                stop:0 transparent, stop:0.46 transparent,
-                                stop:0.5 @splitter_marker@, stop:0.54 transparent, stop:1 transparent);
+                                stop:0 @splitter_track@, stop:0.43 @splitter_track@,
+                                stop:0.5 @splitter_marker@, stop:0.57 @splitter_track@, stop:1 @splitter_track@);
 }
 QToolTip {
     background-color: @tooltip_bg@;
@@ -270,6 +324,32 @@ QToolTip {
 QLabel#lightScaleNoteLabel {
     color: @note_text@;
     font-size: 12px;
+}
+QLabel#scanSummaryStatusLabel {
+    font-size: 13px;
+    font-weight: 700;
+    border-radius: 4px;
+    padding: 3px 8px;
+}
+QLabel#scanSummaryStatusLabel[scanState="idle"] {
+    background-color: @status_idle_bg@;
+    border: 1px solid @status_idle_border@;
+    color: @status_idle_text@;
+}
+QLabel#scanSummaryStatusLabel[scanState="running"] {
+    background-color: @status_running_bg@;
+    border: 1px solid @status_running_border@;
+    color: @status_running_text@;
+}
+QLabel#scanSummaryStatusLabel[scanState="success"] {
+    background-color: @status_success_bg@;
+    border: 1px solid @status_success_border@;
+    color: @status_success_text@;
+}
+QLabel#scanSummaryStatusLabel[scanState="error"] {
+    background-color: @status_error_bg@;
+    border: 1px solid @status_error_border@;
+    color: @status_error_text@;
 }
 """
 
@@ -330,6 +410,24 @@ def _stylesheet_for_theme_variant(theme_variant: str) -> str:
     built = _build_ui_stylesheet(key)
     _UI_STYLESHEET_CACHE[key] = built
     return built
+
+
+class _TooltipDelayProxyStyle(QProxyStyle):
+    """Adds a small tooltip wake-up delay to reduce hover noise."""
+
+    def __init__(self, base_style=None, wakeup_delay_ms: int = 650, fall_asleep_delay_ms: int = 2400) -> None:
+        super().__init__(base_style)
+        self._wakeup_delay_ms = max(0, int(wakeup_delay_ms))
+        self._fall_asleep_delay_ms = max(self._wakeup_delay_ms, int(fall_asleep_delay_ms))
+        self._wakeup_hint = getattr(QStyle, "SH_ToolTip_WakeUpDelay", None)
+        self._fall_asleep_hint = getattr(QStyle, "SH_ToolTip_FallAsleepDelay", None)
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None) -> int:  # type: ignore[override]
+        if self._wakeup_hint is not None and hint == self._wakeup_hint:
+            return self._wakeup_delay_ms
+        if self._fall_asleep_hint is not None and hint == self._fall_asleep_hint:
+            return self._fall_asleep_delay_ms
+        return super().styleHint(hint, option, widget, returnData)
 
 
 def _as_xyz(value: Any) -> tuple[float, float, float] | None:
@@ -1272,6 +1370,8 @@ class MainWindow(QMainWindow):
         controls = self._build_controls_group()
         self.controls_group = controls
         self.summary_label = QLabel("No scan run yet.")
+        self.summary_label.setObjectName("scanSummaryStatusLabel")
+        self._set_scan_summary_state("No scan run yet.", "idle")
 
         conflicts_panel = self._build_conflicts_panel()
         details_panel = self._build_details_panel()
@@ -1289,13 +1389,13 @@ class MainWindow(QMainWindow):
         self.summary_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         scan_panel.setMinimumWidth(0)
         scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
-        scan_panel.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Maximum)
+        scan_panel.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         conflicts_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         details_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
         self.left_splitter = QSplitter(Qt.Vertical)
         self.left_splitter.setChildrenCollapsible(False)
-        self.left_splitter.setHandleWidth(8)
+        self.left_splitter.setHandleWidth(10)
         self.left_splitter.setToolTip("Drag this divider to resize Scan/Output and Conflicts panels.")
         self.left_splitter.addWidget(scan_panel)
         self.left_splitter.addWidget(conflicts_panel)
@@ -1304,21 +1404,34 @@ class MainWindow(QMainWindow):
         self.left_splitter.setSizes([210, 790])
         self.left_splitter.splitterMoved.connect(self._on_left_splitter_moved)
         self.left_splitter.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
+        self.left_splitter.handle(1).setCursor(Qt.SizeVerCursor)
 
         self.content_splitter = QSplitter(Qt.Horizontal)
         self.content_splitter.setChildrenCollapsible(False)
-        self.content_splitter.setHandleWidth(8)
+        self.content_splitter.setHandleWidth(10)
         self.content_splitter.setToolTip("Drag this divider to resize left and right main panels.")
         self.content_splitter.addWidget(self.left_splitter)
         self.content_splitter.addWidget(details_panel)
         self.content_splitter.setStretchFactor(0, 1)
         self.content_splitter.setStretchFactor(1, 1)
-        self.content_splitter.setCollapsible(0, True)
+        self.content_splitter.setCollapsible(0, False)
         self.content_splitter.setCollapsible(1, False)
         self.content_splitter.setSizes([1080, 720])
         self.content_splitter.splitterMoved.connect(self._on_content_splitter_moved)
+        self.content_splitter.handle(1).setCursor(Qt.SizeHorCursor)
 
         layout.addWidget(self.content_splitter)
+
+    def _set_scan_summary_state(self, text: str, state: str) -> None:
+        self.summary_label.setText(text)
+        state_name = state if state in {"idle", "running", "success", "error"} else "idle"
+        if str(self.summary_label.property("scanState") or "") == state_name:
+            return
+        self.summary_label.setProperty("scanState", state_name)
+        style = self.summary_label.style()
+        style.unpolish(self.summary_label)
+        style.polish(self.summary_label)
+        self.summary_label.update()
 
     def _mark_as_dropdown(self, combo: QComboBox) -> None:
         tip = combo.toolTip().strip()
@@ -1430,7 +1543,7 @@ class MainWindow(QMainWindow):
 
     def _show_inventory_filter_dialog(self) -> bool:
         dialog = QDialog(self)
-        dialog.setWindowTitle("Export Inventory")
+        dialog.setWindowTitle("Export Results")
         dialog.setModal(True)
         dialog.setMinimumWidth(440)
 
@@ -1439,7 +1552,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(8)
 
         header = QLabel(
-            "Select inventory filters. Scope applies to LP entries and PL rows by matching target keys."
+            "Select export-result filters. Scope applies to LP entries and PL rows by matching target keys."
         )
         header.setWordWrap(True)
         layout.addWidget(header)
@@ -1542,7 +1655,7 @@ class MainWindow(QMainWindow):
             return
         selected_nifs = self._selected_nif_paths()
         self._populate_conflicts_table(preserve_nif_paths=selected_nifs)
-        self.summary_label.setText(self._build_scan_summary_text(self.scan_result))
+        self._set_scan_summary_state(self._build_scan_summary_text(self.scan_result), "success")
 
     def _connect_system_theme_notifications(self) -> None:
         if self._system_theme_signal_connected:
@@ -1930,6 +2043,7 @@ class MainWindow(QMainWindow):
         browse_output_btn.clicked.connect(lambda: self._browse_directory(self.output_dir_edit))
 
         self.scan_btn = QPushButton("Scan")
+        self.scan_btn.setObjectName("scanActionButton")
         self.scan_btn.setToolTip(
             "Run scan using current settings.\n"
             "Updates conflicts table and summary."
@@ -1958,9 +2072,11 @@ class MainWindow(QMainWindow):
         save_decisions_btn.clicked.connect(self.save_decisions_to_disk)
         self.export_patch_btn.clicked.connect(self.export_patch_mod)
         clear_all_decisions_btn.clicked.connect(self.clear_all_decisions)
-        self.inventory_export_btn = QPushButton("Inventory")
+        self.inventory_export_btn = QPushButton("Export Results")
+        self.inventory_export_btn.setEnabled(False)
         self.inventory_export_btn.setToolTip(
-            "Export inventory as CSV + JSON.\n"
+            "Export detailed scan results as CSV + JSON.\n"
+            "Enabled after the first successful scan.\n"
             "Click to open filter window (Interior/Exterior, PortalStrict, NIF only)."
         )
         self.inventory_export_btn.clicked.connect(self.export_inventory_reports)
@@ -2243,8 +2359,8 @@ class MainWindow(QMainWindow):
         preview_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         details_text_splitter = QSplitter(Qt.Vertical)
-        details_text_splitter.setChildrenCollapsible(True)
-        details_text_splitter.setHandleWidth(8)
+        details_text_splitter.setChildrenCollapsible(False)
+        details_text_splitter.setHandleWidth(10)
         details_text_splitter.setToolTip("Drag this divider to resize Anchor Points and Details text panes.")
         details_text_splitter.addWidget(self.anchor_points_text)
         details_text_splitter.addWidget(self.detail_text)
@@ -2252,16 +2368,18 @@ class MainWindow(QMainWindow):
         details_text_splitter.setStretchFactor(1, 1)
         details_text_splitter.setSizes([150, 380])
         details_text_splitter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        details_text_splitter.handle(1).setCursor(Qt.SizeVerCursor)
 
         preview_and_text_splitter = QSplitter(Qt.Vertical)
-        preview_and_text_splitter.setChildrenCollapsible(True)
-        preview_and_text_splitter.setHandleWidth(8)
+        preview_and_text_splitter.setChildrenCollapsible(False)
+        preview_and_text_splitter.setHandleWidth(10)
         preview_and_text_splitter.setToolTip("Drag this divider to resize Anchor Preview vs lower text panes.")
         preview_and_text_splitter.addWidget(preview_group)
         preview_and_text_splitter.addWidget(details_text_splitter)
         preview_and_text_splitter.setStretchFactor(0, 1)
         preview_and_text_splitter.setStretchFactor(1, 1)
         preview_and_text_splitter.setSizes([320, 420])
+        preview_and_text_splitter.handle(1).setCursor(Qt.SizeVerCursor)
 
         layout.addWidget(self.details_decision_widget)
         layout.addWidget(preview_and_text_splitter, 1)
@@ -2372,9 +2490,10 @@ class MainWindow(QMainWindow):
         self._formid_request_inflight_target = None
         self._scan_in_progress = True
         self.scan_btn.setEnabled(False)
+        self.inventory_export_btn.setEnabled(False)
         self.scan_result = None
         self._formid_world_resolution_cache = {}
-        self.summary_label.setText("Scanning...")
+        self._set_scan_summary_state("Scanning...", "running")
         self.detail_text.setPlainText("")
         self._entry_selection_by_nif = {}
         self._conflict_by_nif = {}
@@ -2412,7 +2531,7 @@ class MainWindow(QMainWindow):
             return
         try:
             if not isinstance(result, ScanResult):
-                self.summary_label.setText("Scan failed: invalid result type")
+                self._set_scan_summary_state("Scan failed: invalid result type", "error")
                 return
 
             self.scan_result = result
@@ -2421,9 +2540,11 @@ class MainWindow(QMainWindow):
             self._load_default_decisions_if_present()
 
             self._populate_conflicts_table()
-            self.summary_label.setText(self._build_scan_summary_text(result))
+            self._set_scan_summary_state(self._build_scan_summary_text(result), "success")
+            self.inventory_export_btn.setEnabled(True)
         except Exception as exc:  # noqa: BLE001
-            self.summary_label.setText("Scan finished, but UI update failed.")
+            self._set_scan_summary_state("Scan finished, but UI update failed.", "error")
+            self.inventory_export_btn.setEnabled(False)
             QMessageBox.critical(
                 self,
                 "UI Error",
@@ -2438,16 +2559,18 @@ class MainWindow(QMainWindow):
         if scan_id != self._active_scan_id or self._is_closing:
             return
         try:
-            self.summary_label.setText("Scan failed.")
+            self._set_scan_summary_state("Scan failed.", "error")
             self.anchor_preview.clear_anchor_series()
             self.anchor_preview.clear_mesh_points()
             self.anchor_preview.set_mesh_status_text("Mesh cloud: not loaded")
             self.anchor_summary_label.setText("Scan failed. No preview available.")
             self.mesh_status_label.setText("Mesh: not loaded")
             self.anchor_points_text.clear()
+            self.inventory_export_btn.setEnabled(False)
             QMessageBox.critical(self, "Scan Failed", self._format_scan_error_message(error_text))
         except Exception:  # noqa: BLE001
-            self.summary_label.setText("Scan failed (UI update error).")
+            self._set_scan_summary_state("Scan failed (UI update error).", "error")
+            self.inventory_export_btn.setEnabled(False)
 
     @Slot()
     def _on_scan_thread_finished(self) -> None:
@@ -2457,6 +2580,7 @@ class MainWindow(QMainWindow):
         self.conflicts_table.setEnabled(True)
         if not self._is_closing:
             self.scan_btn.setEnabled(True)
+            self.inventory_export_btn.setEnabled(self.scan_result is not None)
 
     def closeEvent(self, event) -> None:
         self._is_closing = True
@@ -3063,7 +3187,7 @@ class MainWindow(QMainWindow):
         if self.scan_result is not None and self.hide_unresolved_formid_local_duplicates_cb.isChecked():
             selected_nifs = self._selected_nif_paths()
             self._populate_conflicts_table(preserve_nif_paths=selected_nifs)
-            self.summary_label.setText(self._build_scan_summary_text(self.scan_result))
+            self._set_scan_summary_state(self._build_scan_summary_text(self.scan_result), "success")
 
         selected = self._selected_conflict()
         if (
@@ -4359,9 +4483,17 @@ class MainWindow(QMainWindow):
             applied, stale = apply_decisions(self.scan_result.conflicts, decisions)
             self.decisions = applied
             if stale:
-                self.summary_label.setText(self.summary_label.text() + f" | Stale decisions skipped: {len(stale)}")
+                current_state = str(self.summary_label.property("scanState") or "success")
+                self._set_scan_summary_state(
+                    self.summary_label.text() + f" | Stale decisions skipped: {len(stale)}",
+                    current_state,
+                )
         except Exception as exc:  # noqa: BLE001
-            self.summary_label.setText(self.summary_label.text() + " | Default decisions load failed.")
+            current_state = str(self.summary_label.property("scanState") or "error")
+            self._set_scan_summary_state(
+                self.summary_label.text() + " | Default decisions load failed.",
+                current_state,
+            )
             QMessageBox.warning(
                 self,
                 "Load Decisions",
@@ -4461,7 +4593,7 @@ class MainWindow(QMainWindow):
 
     def export_inventory_reports(self) -> None:
         if self.scan_result is None:
-            QMessageBox.warning(self, "Export Inventory", "Run scan first.")
+            QMessageBox.warning(self, "Export Results", "Run scan first.")
             return
         if not self._show_inventory_filter_dialog():
             return
@@ -4470,9 +4602,9 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(
                 self,
-                "Export Inventory",
+                "Export Results",
                 self._format_file_io_error_message(
-                    "Inventory export failed.",
+                    "Result export failed.",
                     str(exc),
                 ),
             )
@@ -4481,9 +4613,9 @@ class MainWindow(QMainWindow):
         filters = result.filter_summary
         QMessageBox.information(
             self,
-            "Export Inventory",
+            "Export Results",
             (
-                "Inventory export written to:\n"
+                "Result export written to:\n"
                 f"{result.output_dir}\n\n"
                 f"JSON: {result.json_path}\n"
                 f"Targets CSV: {result.target_csv_path}\n"
@@ -4550,6 +4682,7 @@ class MainWindow(QMainWindow):
 def main() -> int:
     app = QApplication([])
     app.setApplicationName("Placed Lights and Particle Lights Conflict Resolver")
+    app.setStyle(_TooltipDelayProxyStyle(app.style()))
     startup_theme_mode = _normalize_theme_mode(QSettings("ParticleTroned", "LPConflictResolver").value("ui/theme_mode", "auto", str))
     startup_theme_variant = _resolve_theme_variant(startup_theme_mode)
     app.setStyleSheet(_stylesheet_for_theme_variant(startup_theme_variant))
