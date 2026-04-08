@@ -413,9 +413,9 @@ def _stylesheet_for_theme_variant(theme_variant: str) -> str:
 
 
 class _TooltipDelayProxyStyle(QProxyStyle):
-    """Adds a small tooltip wake-up delay to reduce hover noise."""
+    """Adds a tooltip wake-up delay and quickly exits tooltip mode between widgets."""
 
-    def __init__(self, base_style=None, wakeup_delay_ms: int = 1000, fall_asleep_delay_ms: int = 2400) -> None:
+    def __init__(self, base_style=None, wakeup_delay_ms: int = 1000, fall_asleep_delay_ms: int = 80) -> None:
         super().__init__(base_style)
         self._wakeup_delay_ms = max(0, int(wakeup_delay_ms))
         self._fall_asleep_delay_ms = max(self._wakeup_delay_ms, int(fall_asleep_delay_ms))
@@ -1371,6 +1371,7 @@ class MainWindow(QMainWindow):
         controls = self._build_controls_group()
         self.controls_group = controls
         self.summary_label = QLabel("No scan run yet.")
+        self.summary_label.setWordWrap(True)
         self.summary_label.setObjectName("scanSummaryStatusLabel")
         self._set_scan_summary_state("No scan run yet.", "idle")
 
@@ -1387,7 +1388,7 @@ class MainWindow(QMainWindow):
         conflicts_panel.setMinimumWidth(180)
         details_panel.setMinimumWidth(220)
         controls.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.summary_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self.summary_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
         scan_panel.setMinimumWidth(0)
         scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         scan_panel.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -1426,6 +1427,9 @@ class MainWindow(QMainWindow):
 
     def _set_scan_summary_state(self, text: str, state: str) -> None:
         self.summary_label.setText(text)
+        self.summary_label.updateGeometry()
+        if hasattr(self, "scan_panel"):
+            self.scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         state_name = state if state in {"idle", "running", "success", "error"} else "idle"
         if str(self.summary_label.property("scanState") or "") == state_name:
             return
@@ -2824,10 +2828,12 @@ class MainWindow(QMainWindow):
         self._compact_details_controls()
 
     def _on_content_splitter_moved(self, _pos: int, _index: int) -> None:
+        self.scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         self._compact_conflicts_columns()
         self._compact_details_controls()
 
     def _on_left_splitter_moved(self, _pos: int, _index: int) -> None:
+        self.scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         self._compact_conflicts_columns()
 
     def _compute_scan_panel_min_height(self) -> int:
@@ -2837,6 +2843,10 @@ class MainWindow(QMainWindow):
         margins = scan_layout.contentsMargins()
         controls_h = self.controls_group.sizeHint().height()
         summary_h = self.summary_label.sizeHint().height()
+        summary_width = max(220, self.scan_panel.width() - margins.left() - margins.right())
+        wrapped_summary_h = self.summary_label.heightForWidth(summary_width)
+        if wrapped_summary_h > 0:
+            summary_h = max(summary_h, wrapped_summary_h)
         spacing = max(0, scan_layout.spacing())
         desired = controls_h + summary_h + spacing + margins.top() + margins.bottom() + 6
         # Keep controls visible (including second button row) while still bounding
