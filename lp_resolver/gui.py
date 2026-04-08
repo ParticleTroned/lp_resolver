@@ -1422,6 +1422,7 @@ class MainWindow(QMainWindow):
         self.content_splitter.handle(1).setCursor(Qt.SizeHorCursor)
 
         layout.addWidget(self.content_splitter)
+        self._set_scan_dependent_controls_enabled(False)
 
     def _set_scan_summary_state(self, text: str, state: str) -> None:
         self.summary_label.setText(text)
@@ -1433,6 +1434,27 @@ class MainWindow(QMainWindow):
         style.unpolish(self.summary_label)
         style.polish(self.summary_label)
         self.summary_label.update()
+
+    def _set_scan_dependent_controls_enabled(self, enabled: bool) -> None:
+        state = bool(enabled) and not self._scan_in_progress and not self._is_closing
+        for name in (
+            "load_decisions_btn",
+            "save_decisions_btn",
+            "export_patch_btn",
+            "inventory_export_btn",
+            "clear_all_decisions_btn",
+            "apply_overlap_disable_btn",
+            "apply_highest_duplicates_btn",
+            "action_combo",
+            "entry_list",
+            "apply_btn",
+            "clear_btn",
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setEnabled(state)
+        if hasattr(self, "conflicts_table"):
+            self.conflicts_table.setEnabled(state)
 
     def _mark_as_dropdown(self, combo: QComboBox) -> None:
         tip = combo.toolTip().strip()
@@ -2064,13 +2086,13 @@ class MainWindow(QMainWindow):
         )
         self.scan_btn.clicked.connect(self.start_scan)
 
-        load_decisions_btn = QPushButton("Load Decisions")
-        save_decisions_btn = QPushButton("Save Decisions")
+        self.load_decisions_btn = QPushButton("Load Decisions")
+        self.save_decisions_btn = QPushButton("Save Decisions")
         self.export_patch_btn = QPushButton("Export Patch")
-        clear_all_decisions_btn = QPushButton("Clear All Decisions")
-        load_decisions_btn.setToolTip("Load resolver decisions from JSON.")
-        clear_all_decisions_btn.setToolTip("Remove all currently stored decisions from this session.")
-        save_decisions_btn.setToolTip("Save current decisions to JSON.")
+        self.clear_all_decisions_btn = QPushButton("Clear All Decisions")
+        self.load_decisions_btn.setToolTip("Load resolver decisions from JSON.")
+        self.clear_all_decisions_btn.setToolTip("Remove all currently stored decisions from this session.")
+        self.save_decisions_btn.setToolTip("Save current decisions to JSON.")
         self.export_patch_btn.setToolTip(
             "Generate patch mod JSON from current decisions.\n"
             "Writes overrides at original LightPlacer source paths under MO2 mods/<PatchName>/\n"
@@ -2082,10 +2104,10 @@ class MainWindow(QMainWindow):
             "Vortex: ensure this patch mod has higher deployment/conflict priority than all other\n"
             "mods that provide LightPlacer JSON files, so the patch files win."
         )
-        load_decisions_btn.clicked.connect(self.load_decisions_from_disk)
-        save_decisions_btn.clicked.connect(self.save_decisions_to_disk)
+        self.load_decisions_btn.clicked.connect(self.load_decisions_from_disk)
+        self.save_decisions_btn.clicked.connect(self.save_decisions_to_disk)
         self.export_patch_btn.clicked.connect(self.export_patch_mod)
-        clear_all_decisions_btn.clicked.connect(self.clear_all_decisions)
+        self.clear_all_decisions_btn.clicked.connect(self.clear_all_decisions)
         self.inventory_export_btn = QPushButton("Export Results")
         self.inventory_export_btn.setEnabled(False)
         self.inventory_export_btn.setToolTip(
@@ -2095,15 +2117,15 @@ class MainWindow(QMainWindow):
         )
         self.inventory_export_btn.clicked.connect(self.export_inventory_reports)
 
-        apply_overlap_disable_btn = QPushButton("Disable LP for PL overlaps")
-        apply_overlap_disable_btn.clicked.connect(self.apply_disable_for_all_overlaps)
-        apply_highest_duplicates_btn = QPushButton("Keep Highest For All Duplicates")
-        apply_highest_duplicates_btn.clicked.connect(self.apply_keep_highest_for_all_duplicates)
-        apply_overlap_disable_btn.setToolTip(
+        self.apply_overlap_disable_btn = QPushButton("Disable LP for PL overlaps")
+        self.apply_overlap_disable_btn.clicked.connect(self.apply_disable_for_all_overlaps)
+        self.apply_highest_duplicates_btn = QPushButton("Keep Highest For All Duplicates")
+        self.apply_highest_duplicates_btn.clicked.connect(self.apply_keep_highest_for_all_duplicates)
+        self.apply_overlap_disable_btn.setToolTip(
             "Bulk action: for every Light Placer versus Particle Lights overlap conflict, "
             "disable Light Placer entries in the exported patch."
         )
-        apply_highest_duplicates_btn.setToolTip(
+        self.apply_highest_duplicates_btn.setToolTip(
             "Bulk action: set decision 'keep_highest_priority' for duplicate conflicts.\n"
             "Winner criteria (deterministic):\n"
             "1) MO2 position (source_priority; larger wins)\n"
@@ -2163,25 +2185,25 @@ class MainWindow(QMainWindow):
 
         for btn in (
             self.scan_btn,
-            load_decisions_btn,
-            save_decisions_btn,
+            self.load_decisions_btn,
+            self.save_decisions_btn,
             self.export_patch_btn,
             self.inventory_export_btn,
-            clear_all_decisions_btn,
-            apply_overlap_disable_btn,
-            apply_highest_duplicates_btn,
+            self.clear_all_decisions_btn,
+            self.apply_overlap_disable_btn,
+            self.apply_highest_duplicates_btn,
         ):
             btn.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
 
         button_row_primary = QHBoxLayout()
         button_row_primary.setSpacing(6)
         button_row_primary.addWidget(self.scan_btn)
-        button_row_primary.addWidget(load_decisions_btn)
-        button_row_primary.addWidget(save_decisions_btn)
+        button_row_primary.addWidget(self.load_decisions_btn)
+        button_row_primary.addWidget(self.save_decisions_btn)
         button_row_primary.addWidget(self.export_patch_btn)
-        button_row_primary.addWidget(clear_all_decisions_btn)
-        button_row_primary.addWidget(apply_overlap_disable_btn)
-        button_row_primary.addWidget(apply_highest_duplicates_btn)
+        button_row_primary.addWidget(self.clear_all_decisions_btn)
+        button_row_primary.addWidget(self.apply_overlap_disable_btn)
+        button_row_primary.addWidget(self.apply_highest_duplicates_btn)
         button_row_primary.addStretch(1)
         grid.addLayout(button_row_primary, 7, 0, 1, 3)
 
@@ -2327,7 +2349,7 @@ class MainWindow(QMainWindow):
         self.detail_text.setReadOnly(True)
         self.detail_text.setLineWrapMode(QTextEdit.WidgetWidth)
         self.detail_text.setWordWrapMode(QTextOption.WrapAnywhere)
-        self.detail_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.detail_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.detail_text.setToolTip(
             "Detailed conflict breakdown:\n"
             "- LP/PL source files\n"
@@ -2360,7 +2382,7 @@ class MainWindow(QMainWindow):
         self.anchor_points_text.setReadOnly(True)
         self.anchor_points_text.setLineWrapMode(QTextEdit.WidgetWidth)
         self.anchor_points_text.setWordWrapMode(QTextOption.WrapAnywhere)
-        self.anchor_points_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.anchor_points_text.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.anchor_points_text.setMinimumHeight(64)
         self.anchor_points_text.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.anchor_points_text.setToolTip(
@@ -2505,7 +2527,7 @@ class MainWindow(QMainWindow):
         self._formid_request_inflight_target = None
         self._scan_in_progress = True
         self.scan_btn.setEnabled(False)
-        self.inventory_export_btn.setEnabled(False)
+        self._set_scan_dependent_controls_enabled(False)
         self.scan_result = None
         self._formid_world_resolution_cache = {}
         self._set_scan_summary_state("Scanning...", "running")
@@ -2521,7 +2543,6 @@ class MainWindow(QMainWindow):
         self.conflicts_table.blockSignals(True)
         self.conflicts_table.setRowCount(0)
         self.conflicts_table.blockSignals(False)
-        self.conflicts_table.setEnabled(False)
         self.entry_list.clear()
         self._update_entry_list_height()
         worker = ScanWorker(config, scan_id)
@@ -2557,10 +2578,10 @@ class MainWindow(QMainWindow):
 
             self._populate_conflicts_table()
             self._set_scan_summary_state(self._build_scan_summary_text(result), "success")
-            self.inventory_export_btn.setEnabled(True)
+            self._set_scan_dependent_controls_enabled(True)
         except Exception as exc:  # noqa: BLE001
             self._set_scan_summary_state("Scan finished, but UI update failed.", "error")
-            self.inventory_export_btn.setEnabled(False)
+            self._set_scan_dependent_controls_enabled(False)
             QMessageBox.critical(
                 self,
                 "UI Error",
@@ -2582,21 +2603,20 @@ class MainWindow(QMainWindow):
             self.anchor_summary_label.setText("Scan failed. No preview available.")
             self.mesh_status_label.setText("Mesh: not loaded")
             self.anchor_points_text.clear()
-            self.inventory_export_btn.setEnabled(False)
+            self._set_scan_dependent_controls_enabled(False)
             QMessageBox.critical(self, "Scan Failed", self._format_scan_error_message(error_text))
         except Exception:  # noqa: BLE001
             self._set_scan_summary_state("Scan failed (UI update error).", "error")
-            self.inventory_export_btn.setEnabled(False)
+            self._set_scan_dependent_controls_enabled(False)
 
     @Slot()
     def _on_scan_thread_finished(self) -> None:
         self._worker = None
         self._worker_thread = None
         self._scan_in_progress = False
-        self.conflicts_table.setEnabled(True)
         if not self._is_closing:
             self.scan_btn.setEnabled(True)
-            self.inventory_export_btn.setEnabled(self.scan_result is not None)
+            self._set_scan_dependent_controls_enabled(self.scan_result is not None)
 
     def closeEvent(self, event) -> None:
         self._is_closing = True
@@ -2613,7 +2633,7 @@ class MainWindow(QMainWindow):
                 )
                 self._is_closing = False
                 self.scan_btn.setEnabled(not self._scan_in_progress)
-                self.conflicts_table.setEnabled(not self._scan_in_progress)
+                self._set_scan_dependent_controls_enabled(self.scan_result is not None)
                 event.ignore()
                 return
         formid_thread = self._formid_worker_thread
@@ -2627,7 +2647,7 @@ class MainWindow(QMainWindow):
                 )
                 self._is_closing = False
                 self.scan_btn.setEnabled(not self._scan_in_progress)
-                self.conflicts_table.setEnabled(not self._scan_in_progress)
+                self._set_scan_dependent_controls_enabled(self.scan_result is not None)
                 event.ignore()
                 return
         self._save_persistent_paths()
@@ -3715,6 +3735,8 @@ class MainWindow(QMainWindow):
         body = "\n".join(html_lines)
         return (
             "<pre style=\"white-space: pre-wrap; "
+            "overflow-wrap: anywhere; "
+            "word-break: break-word; "
             "font-family: Consolas, 'Courier New', monospace; "
             "font-size: 12px; margin: 0;\">"
             f"{body}</pre>"
