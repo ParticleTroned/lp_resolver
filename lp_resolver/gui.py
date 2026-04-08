@@ -415,7 +415,7 @@ def _stylesheet_for_theme_variant(theme_variant: str) -> str:
 class _TooltipDelayProxyStyle(QProxyStyle):
     """Adds a small tooltip wake-up delay to reduce hover noise."""
 
-    def __init__(self, base_style=None, wakeup_delay_ms: int = 650, fall_asleep_delay_ms: int = 2400) -> None:
+    def __init__(self, base_style=None, wakeup_delay_ms: int = 1000, fall_asleep_delay_ms: int = 2400) -> None:
         super().__init__(base_style)
         self._wakeup_delay_ms = max(0, int(wakeup_delay_ms))
         self._fall_asleep_delay_ms = max(self._wakeup_delay_ms, int(fall_asleep_delay_ms))
