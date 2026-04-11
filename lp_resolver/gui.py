@@ -1348,6 +1348,7 @@ class MainWindow(QMainWindow):
         self._formid_request_pending_target: str | None = None
         self._active_scan_id = 0
         self._scan_in_progress = False
+        self._auto_rescan_requested = False
         self._updating_conflicts_table = False
         self._is_closing = False
         self._system_theme_signal_connected = False
@@ -1728,6 +1729,23 @@ class MainWindow(QMainWindow):
         self._populate_conflicts_table(preserve_nif_paths=selected_nifs)
         self._set_scan_summary_state(self._build_scan_summary_text(self.scan_result), "success")
 
+    def _on_scan_filter_toggle_requires_rescan(self, checked: bool) -> None:
+        # These filters are baked into ScanConfig/run_scan, so enabling them
+        # needs a fresh scan result rather than local table re-filtering.
+        if not checked:
+            return
+        if self._is_closing:
+            return
+        thread = self._worker_thread
+        if self._scan_in_progress or (thread is not None and thread.isRunning()):
+            self._auto_rescan_requested = True
+            return
+        if self.scan_result is None:
+            return
+        if self._scan_filters_match_last_result():
+            return
+        self.start_scan()
+
     def _connect_system_theme_notifications(self) -> None:
         if self._system_theme_signal_connected:
             return
@@ -2046,37 +2064,49 @@ class MainWindow(QMainWindow):
         self.only_overlap_cb = QCheckBox("Overlap Only")
         self.only_overlap_cb.setToolTip(
             "Show only LP-vs-PL overlaps.\n"
-            "Hides LP-only duplicate conflicts."
+            "Hides LP-only duplicate conflicts.\n"
+            "Enabling this toggle auto-starts a rescan (when a scan result exists)."
         )
         self.ignore_duplicate_exact_cb = QCheckBox("Ignore Exact Duplicates")
         self.ignore_duplicate_exact_cb.setToolTip(
             "Hide exact duplicate LP entries (same effective settings).\n"
-            "Useful when you only want to review divergent conflicts."
+            "Useful when you only want to review divergent conflicts.\n"
+            "Enabling this toggle auto-starts a rescan (when a scan result exists)."
         )
         self.cross_mod_duplicates_cb = QCheckBox("Cross-Mod Duplicates")
         self.cross_mod_duplicates_cb.setToolTip(
             "Keep LP duplicate conflict types only when entries come from different mods.\n"
-            "Same-mod duplicates are filtered out."
+            "Same-mod duplicates are filtered out.\n"
+            "Enabling this toggle auto-starts a rescan (when a scan result exists)."
         )
         self.include_overridden_files_cb = QCheckBox("Include Overridden")
         self.include_overridden_files_cb.setChecked(False)
         self.include_overridden_files_cb.setToolTip(
             "Include JSON files that are overridden at the same virtual path by higher-priority mods.\n"
-            "Off (recommended): scan only effective MO2 winners."
+            "Off (recommended): scan only effective MO2 winners.\n"
+            "Enabling this toggle auto-starts a rescan (when a scan result exists)."
         )
         self.include_refinements_cb = QCheckBox("Include Refinements")
         self.include_refinements_cb.setChecked(False)
         self.include_refinements_cb.setToolTip(
             "Include 'duplicate_refinement_disjoint' in results.\n"
-            "Off (recommended): focus on likely stacking conflicts only."
+            "Off (recommended): focus on likely stacking conflicts only.\n"
+            "Enabling this toggle auto-starts a rescan (when a scan result exists)."
         )
         self.include_worldspace_divergent_cb = QCheckBox("Include Worldspace Splits")
         self.include_worldspace_divergent_cb.setChecked(False)
         self.include_worldspace_divergent_cb.setToolTip(
             "Include 'duplicate_condition_exclusive' entries.\n"
             "These are overlapping anchors with mutually exclusive worldspace conditions\n"
-            "(for example interior vs exterior variants), so they usually do not stack simultaneously."
+            "(for example interior vs exterior variants), so they usually do not stack simultaneously.\n"
+            "Enabling this toggle auto-starts a rescan (when a scan result exists)."
         )
+        self.only_overlap_cb.toggled.connect(self._on_scan_filter_toggle_requires_rescan)
+        self.ignore_duplicate_exact_cb.toggled.connect(self._on_scan_filter_toggle_requires_rescan)
+        self.cross_mod_duplicates_cb.toggled.connect(self._on_scan_filter_toggle_requires_rescan)
+        self.include_overridden_files_cb.toggled.connect(self._on_scan_filter_toggle_requires_rescan)
+        self.include_refinements_cb.toggled.connect(self._on_scan_filter_toggle_requires_rescan)
+        self.include_worldspace_divergent_cb.toggled.connect(self._on_scan_filter_toggle_requires_rescan)
         self.formid_preview_enabled_cb = QCheckBox("FormID LP Preview")
         self.formid_preview_enabled_cb.setChecked(True)
         self.formid_preview_enabled_cb.setToolTip(
@@ -2481,6 +2511,40 @@ class MainWindow(QMainWindow):
             include_overridden_files=self.include_overridden_files_cb.isChecked(),
         )
 
+    def _scan_filter_signature(self) -> tuple[str, bool, bool, bool, bool, bool, bool]:
+        return (
+            str(self.pl_source_combo.currentData() or "nif"),
+            self.only_overlap_cb.isChecked(),
+            self.ignore_duplicate_exact_cb.isChecked(),
+            self.cross_mod_duplicates_cb.isChecked(),
+            self.include_refinements_cb.isChecked(),
+            self.include_worldspace_divergent_cb.isChecked(),
+            self.include_overridden_files_cb.isChecked(),
+        )
+
+    def _scan_result_filter_signature(
+        self,
+        result: ScanResult | None,
+    ) -> tuple[str, bool, bool, bool, bool, bool, bool] | None:
+        if result is None:
+            return None
+        cfg = result.config
+        return (
+            str(cfg.pl_source or "nif"),
+            bool(cfg.only_overlap),
+            bool(cfg.ignore_duplicate_exact),
+            bool(cfg.cross_mod_lp_duplicates_only),
+            bool(cfg.include_refinements),
+            bool(cfg.include_worldspace_divergent),
+            bool(cfg.include_overridden_files),
+        )
+
+    def _scan_filters_match_last_result(self) -> bool:
+        previous = self._scan_result_filter_signature(self.scan_result)
+        if previous is None:
+            return False
+        return self._scan_filter_signature() == previous
+
     def _build_scan_summary_text(self, result: ScanResult) -> str:
         visible_conflicts = len(self._conflict_by_nif)
         hidden_conflicts = max(0, len(result.conflicts) - visible_conflicts)
@@ -2652,6 +2716,12 @@ class MainWindow(QMainWindow):
         self._worker = None
         self._worker_thread = None
         self._scan_in_progress = False
+        if self._auto_rescan_requested and not self._is_closing:
+            self._auto_rescan_requested = False
+            if not self._scan_filters_match_last_result():
+                self.start_scan()
+                if self._scan_in_progress:
+                    return
         if not self._is_closing:
             self.scan_btn.setEnabled(True)
             self._set_scan_dependent_controls_enabled(self.scan_result is not None)
