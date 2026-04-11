@@ -1,5 +1,5 @@
 # Placed Lights and Particle Lights Conflict Resolver  
-Version: 0.2.1
+Version: 0.2.3
 
 This guide is for first-time users. It explains what the tool changes, how mod load order affects results (MO2 or Vortex), and how to export a safe patch.
 
@@ -117,8 +117,12 @@ Vortex priority note (important):
 - `Results_targets.csv`
 - `Results_lp_entries.csv`
 - `Results_pl_targets.csv`
-16. If Light Scale is enabled, LP Resolver exports `<Patch Mod Name>_LightIntensityPatch` after the conflict patch.
-17. Ensure patch priority is highest so overrides win:
+16. Export Results filter defaults:
+- `PortalStrict (LP only)`: OFF
+- `NIF targets only (LP + PL)`: OFF
+- `Conflicts only`: OFF
+17. If Light Scale is enabled, LP Resolver exports `<Patch Mod Name>_LightIntensityPatch` after the conflict patch.
+18. Ensure patch priority is highest so overrides win:
 - MO2: place `<Patch Mod Name>_LightIntensityPatch` after `<Patch Mod Name>` and after other LightPlacer JSON providers.
 - Vortex: set both patches to highest deploy/conflict priority, with `_LightIntensityPatch` winning last.
 
@@ -185,29 +189,35 @@ If screenshots are not available yet, keep these image links as placeholders and
 
 - Shows only LP vs PL overlaps.
 - Good when your goal is "particle lights vs placed lights" cleanup.
+- Changing this toggle automatically starts a new scan (if a previous scan result exists).
 
 `Include Refinements`
 
 - Includes disjoint LP entries that may be intentional detail coverage.
 - OFF is cleaner for true stacking work.
+- Changing this toggle automatically starts a new scan (if a previous scan result exists).
 
 `Include Worldspace Splits`
 
 - Includes condition-exclusive variants (for example interior vs exterior).
 - Usually not active at same time, so OFF by default.
+- Changing this toggle automatically starts a new scan (if a previous scan result exists).
 
 `Cross-Mod Duplicates`
 
 - Show duplicates only when they come from different mods.
+- Changing this toggle automatically starts a new scan (if a previous scan result exists).
 
 `Ignore Exact Duplicates`
 
 - Hide exact duplicates to focus on divergent conflicts.
+- Changing this toggle automatically starts a new scan (if a previous scan result exists).
 
 `Include Overridden`
 
 - Includes files currently overridden by higher-priority mods.
 - Use for audit/debug, not for normal cleanup.
+- Changing this toggle automatically starts a new scan (if a previous scan result exists).
 
 `FormID LP Preview`
 
@@ -242,10 +252,14 @@ If screenshots are not available yet, keep these image links as placeholders and
 - Located in `Scan And Output`, directly below `Light Scale`.
 - Disabled until the first successful scan completes.
 - Opens a filter window, then exports audit files (`CSV + JSON`) to `Output Dir`.
-- Scope filter: `All`, `Interior`, `Exterior` (applies to LP entries and PL rows by matching target keys).
+- Scope filter: `All`, `Interior`, `Exterior`, `Unscoped` (applies to LP entries and PL rows by matching target keys).
+- Scope behavior:
+- `Interior`/`Exterior`: strict scoped subsets based on `GetInWorldspace ... == 0/1` plus filename/path hint inference.
+- `Unscoped`: entries without explicit or inferred worldspace scope.
 - `PortalStrict (LP only)`: include only LP entries detected as PortalStrict.
 - `NIF targets only (LP + PL)`: include only NIF target keys that contain LP and/or PL light data.
 - `Conflicts only`: export only LP/PL rows whose target keys are currently detected as conflicts.
+- Export dialog includes scope coverage diagnostics (scoped/unscoped counts and filter-stage breakdown) to explain why a filter combination returned few or zero rows.
 
 ---
 
