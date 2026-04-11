@@ -3502,8 +3502,19 @@ class MainWindow(QMainWindow):
 
             self.detail_text.setHtml(self._render_conflict_detail_html(conflict))
             formid_resolution, formid_status = self._resolve_formid_world_resolution_for_conflict(conflict)
-            mesh_status, mesh_points = self._load_mesh_preview_for_conflict(conflict, formid_resolution=formid_resolution)
-            nif_radius_hint, _nif_radius_detail = self._load_nif_radius_hint_for_conflict(conflict)
+            mesh_points: list[tuple[float, float, float]] = []
+            if self._requires_mesh_preview_for_conflict(conflict):
+                mesh_status, mesh_points = self._load_mesh_preview_for_conflict(
+                    conflict,
+                    formid_resolution=formid_resolution,
+                )
+            else:
+                mesh_status = "skipped (not needed for this conflict)"
+                self.anchor_preview.clear_mesh_points()
+                self.anchor_preview.set_mesh_status_text("Mesh cloud: skipped (fast preview)")
+            nif_radius_hint: float | None = None
+            if self._requires_nif_radius_hint_for_conflict(conflict):
+                nif_radius_hint, _nif_radius_detail = self._load_nif_radius_hint_for_conflict(conflict)
             node_anchor_points, node_anchor_status = self._load_nif_node_anchor_points_for_conflict(
                 conflict,
                 formid_resolution=formid_resolution,
@@ -4762,6 +4773,28 @@ class MainWindow(QMainWindow):
                     str(exc),
                 ),
             )
+
+    def _requires_mesh_preview_for_conflict(self, conflict: Conflict) -> bool:
+        # Mesh loading is one of the most expensive per-selection operations.
+        # For LP-only conflicts we can render anchors from LP points/nodes directly.
+        if not conflict.pl_targets:
+            return False
+        for target in conflict.pl_targets:
+            points = _extract_pl_anchor_points(target.payload)
+            if not points:
+                return True
+        return False
+
+    def _requires_nif_radius_hint_for_conflict(self, conflict: Conflict) -> bool:
+        if not _is_nif_target(conflict.nif_path_canonical):
+            return False
+        for target in conflict.pl_targets:
+            if _estimate_pl_radius_units(target.payload) is not None:
+                continue
+            kind = str(target.payload.get("kind", "")).strip().lower()
+            if kind == "enb_particle_lights_nif":
+                return True
+        return False
 
     def _export_patch_outputs(self, patch_name: str):
         result = write_patch_mod(self.scan_result, self.decisions, patch_mod_name=patch_name)
