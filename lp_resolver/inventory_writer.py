@@ -14,12 +14,11 @@ from typing import Any
 from .engine import ScanResult
 from .models import LightPlacerEntry, ParticleLightTarget
 from .priority import is_portal_strict_entry
+from .worldspace_conditions import iter_get_in_worldspace_states
 
-INVENTORY_WORLDSPACE_SCOPE_VALUES = {"all", "interior", "exterior"}
-_WORLDSPACE_COND_RE = re.compile(
-    r"getinworldspace\s+([a-z0-9_]+)\s+none\s*==\s*([01])",
-    re.IGNORECASE,
-)
+INVENTORY_WORLDSPACE_SCOPE_VALUES = {"all", "interior", "exterior", "unscoped"}
+_INTERIOR_HINT_TOKENS = {"interior", "indoor", "inside", "isl"}
+_EXTERIOR_HINT_TOKENS = {"exterior", "ext", "osl", "outdoor", "outside", "worldspace", "tamriel"}
 
 
 @dataclass(frozen=True)
@@ -54,41 +53,39 @@ def _target_type_label(target_key: str) -> str:
     return "other"
 
 
-def _normalized_token(value: str) -> str:
-    return "".join(ch for ch in value.lower() if ch.isalnum())
-
-
-def _iter_conditions(value: Any):
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            key_token = _normalized_token(str(key))
-            if key_token == "conditions" and isinstance(nested, list):
-                for condition in nested:
-                    if isinstance(condition, str):
-                        text = condition.strip()
-                        if text:
-                            yield text
-            yield from _iter_conditions(nested)
-    elif isinstance(value, (list, tuple, set)):
-        for nested in value:
-            yield from _iter_conditions(nested)
-
-
 def _entry_worldspace_flags(entry: LightPlacerEntry) -> tuple[bool, bool]:
     has_interior = False
     has_exterior = False
-    for condition in _iter_conditions(entry.settings):
-        for match in _WORLDSPACE_COND_RE.finditer(condition):
-            equals_one = match.group(2) == "1"
-            if equals_one:
-                has_exterior = True
-            else:
-                has_interior = True
+    for is_exterior in iter_get_in_worldspace_states(entry.settings):
+        if is_exterior:
+            has_exterior = True
+        else:
+            has_interior = True
     return has_interior, has_exterior
 
 
-def _entry_worldspace_scope_label(entry: LightPlacerEntry) -> str:
+def _entry_worldspace_flags_from_source_path(entry: LightPlacerEntry) -> tuple[bool, bool]:
+    source_text = f"{entry.source_mod}/{entry.source_file}".lower()
+    tokens = [token for token in re.split(r"[^a-z0-9]+", source_text) if token]
+    if not tokens:
+        return False, False
+    has_interior = any(token in _INTERIOR_HINT_TOKENS for token in tokens)
+    has_exterior = any(token in _EXTERIOR_HINT_TOKENS for token in tokens)
+    return has_interior, has_exterior
+
+
+def _entry_worldspace_flags_effective(entry: LightPlacerEntry) -> tuple[bool, bool, str]:
     has_interior, has_exterior = _entry_worldspace_flags(entry)
+    if has_interior or has_exterior:
+        return has_interior, has_exterior, "explicit"
+    has_interior, has_exterior = _entry_worldspace_flags_from_source_path(entry)
+    if has_interior or has_exterior:
+        return has_interior, has_exterior, "inferred"
+    return False, False, "unscoped"
+
+
+def _entry_worldspace_scope_label(entry: LightPlacerEntry) -> str:
+    has_interior, has_exterior, _ = _entry_worldspace_flags_effective(entry)
     if has_interior and has_exterior:
         return "mixed"
     if has_interior:
@@ -102,11 +99,13 @@ def _entry_matches_worldspace_scope(entry: LightPlacerEntry, worldspace_scope: s
     scope = worldspace_scope.strip().lower()
     if scope == "all":
         return True
-    has_interior, has_exterior = _entry_worldspace_flags(entry)
+    has_interior, has_exterior, source = _entry_worldspace_flags_effective(entry)
     if scope == "interior":
         return has_interior
     if scope == "exterior":
         return has_exterior
+    if scope == "unscoped":
+        return source == "unscoped"
     return True
 
 
@@ -120,6 +119,85 @@ def _build_conflict_types_by_target(scan_result: ScanResult) -> dict[str, set[st
     for conflict in scan_result.detected_conflicts:
         conflict_types_by_target.setdefault(conflict.nif_path_canonical, set()).update(conflict.conflict_types)
     return conflict_types_by_target
+
+
+def _worldspace_scope_stats(entries: list[LightPlacerEntry]) -> dict[str, int]:
+    explicit_interior_only = 0
+    explicit_exterior_only = 0
+    explicit_mixed = 0
+    inferred_interior_only = 0
+    inferred_exterior_only = 0
+    inferred_mixed = 0
+    unscoped = 0
+    for entry in entries:
+        has_interior, has_exterior, source = _entry_worldspace_flags_effective(entry)
+        if source == "unscoped":
+            unscoped += 1
+            continue
+        is_mixed = has_interior and has_exterior
+        is_interior_only = has_interior and not has_exterior
+        is_exterior_only = has_exterior and not has_interior
+        if source == "explicit":
+            if is_mixed:
+                explicit_mixed += 1
+            elif is_interior_only:
+                explicit_interior_only += 1
+            elif is_exterior_only:
+                explicit_exterior_only += 1
+            continue
+        if is_mixed:
+            inferred_mixed += 1
+        elif is_interior_only:
+            inferred_interior_only += 1
+        elif is_exterior_only:
+            inferred_exterior_only += 1
+
+    interior_only = explicit_interior_only + inferred_interior_only
+    exterior_only = explicit_exterior_only + inferred_exterior_only
+    mixed = explicit_mixed + inferred_mixed
+    scoped_total = interior_only + exterior_only + mixed
+    return {
+        "interior_only": interior_only,
+        "exterior_only": exterior_only,
+        "mixed": mixed,
+        "scoped_total": scoped_total,
+        "unscoped": unscoped,
+        "explicit_interior_only": explicit_interior_only,
+        "explicit_exterior_only": explicit_exterior_only,
+        "explicit_mixed": explicit_mixed,
+        "inferred_interior_only": inferred_interior_only,
+        "inferred_exterior_only": inferred_exterior_only,
+        "inferred_mixed": inferred_mixed,
+    }
+
+
+def _lp_filter_stage_counts(
+    entries: list[LightPlacerEntry],
+    *,
+    worldspace_scope: str,
+    portal_strict_only: bool,
+    nif_only: bool,
+) -> dict[str, int]:
+    total = len(entries)
+    after_scope = 0
+    after_scope_nif = 0
+    after_scope_nif_portal = 0
+    for entry in entries:
+        if not _entry_matches_worldspace_scope(entry, worldspace_scope):
+            continue
+        after_scope += 1
+        if nif_only and _target_type_label(entry.nif_path_canonical) != "nif":
+            continue
+        after_scope_nif += 1
+        if portal_strict_only and not is_portal_strict_entry(entry):
+            continue
+        after_scope_nif_portal += 1
+    return {
+        "total": total,
+        "after_scope": after_scope,
+        "after_scope_nif": after_scope_nif,
+        "after_scope_nif_portal": after_scope_nif_portal,
+    }
 
 
 def _filter_lp_entries(
@@ -270,6 +348,13 @@ def write_inventory_reports(
 
     conflict_types_by_target = _build_conflict_types_by_target(scan_result)
     pl_target_keys_all = {target.nif_path_canonical for target in scan_result.pl_targets}
+    worldspace_stats = _worldspace_scope_stats(scan_result.lp_entries)
+    lp_stage_counts = _lp_filter_stage_counts(
+        scan_result.lp_entries,
+        worldspace_scope=worldspace_scope,
+        portal_strict_only=portal_strict_only,
+        nif_only=nif_only,
+    )
     filtered_lp_entries = _filter_lp_entries(
         scan_result.lp_entries,
         worldspace_scope=worldspace_scope,
@@ -482,5 +567,20 @@ def write_inventory_reports(
             "portal_strict_only": portal_strict_only,
             "nif_only": nif_only,
             "conflicts_only": conflicts_only,
+            "worldspace_scoped_lp_entries": worldspace_stats["scoped_total"],
+            "worldspace_interior_only_lp_entries": worldspace_stats["interior_only"],
+            "worldspace_exterior_only_lp_entries": worldspace_stats["exterior_only"],
+            "worldspace_mixed_lp_entries": worldspace_stats["mixed"],
+            "worldspace_unscoped_lp_entries": worldspace_stats["unscoped"],
+            "worldspace_explicit_interior_only_lp_entries": worldspace_stats["explicit_interior_only"],
+            "worldspace_explicit_exterior_only_lp_entries": worldspace_stats["explicit_exterior_only"],
+            "worldspace_explicit_mixed_lp_entries": worldspace_stats["explicit_mixed"],
+            "worldspace_inferred_interior_only_lp_entries": worldspace_stats["inferred_interior_only"],
+            "worldspace_inferred_exterior_only_lp_entries": worldspace_stats["inferred_exterior_only"],
+            "worldspace_inferred_mixed_lp_entries": worldspace_stats["inferred_mixed"],
+            "lp_stage_total": lp_stage_counts["total"],
+            "lp_stage_after_scope": lp_stage_counts["after_scope"],
+            "lp_stage_after_scope_nif": lp_stage_counts["after_scope_nif"],
+            "lp_stage_after_scope_nif_portal": lp_stage_counts["after_scope_nif_portal"],
         },
     )

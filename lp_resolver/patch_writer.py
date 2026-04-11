@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import copy
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import isfinite
@@ -17,15 +16,12 @@ from .engine import ScanResult
 from .models import LightPlacerEntry
 from .priority import choose_keep_highest_entry, entry_priority_sort_key, is_portal_strict_entry
 from .reporting import render_markdown_report
+from .worldspace_conditions import iter_get_in_worldspace_states
 
 MANAGED_FILES_VERSION = 1
 MANAGED_FILES_NAME = "resolver_managed_files.json"
 LIGHT_SCALE_MANAGED_FILES_NAME = "resolver_light_scale_managed_files.json"
 LIGHT_INTENSITY_SCOPE_VALUES = {"all", "interior", "exterior"}
-_WORLDSPACE_COND_RE = re.compile(
-    r"getinworldspace\s+([a-z0-9_]+)\s+none\s*==\s*([01])",
-    re.IGNORECASE,
-)
 _INTENSITY_KEY_EXACT = {"light", "intensity", "brightness"}
 _INTENSITY_KEY_CONTAINS = ("intensity", "brightness")
 
@@ -287,22 +283,6 @@ def _normalized_token(value: str) -> str:
     return "".join(ch for ch in value.lower() if ch.isalnum())
 
 
-def _iter_conditions(value: Any):
-    if isinstance(value, dict):
-        for key, nested in value.items():
-            key_token = _normalized_token(str(key))
-            if key_token == "conditions" and isinstance(nested, list):
-                for condition in nested:
-                    if isinstance(condition, str):
-                        text = condition.strip()
-                        if text:
-                            yield text
-            yield from _iter_conditions(nested)
-    elif isinstance(value, (list, tuple, set)):
-        for nested in value:
-            yield from _iter_conditions(nested)
-
-
 def _entry_matches_worldspace_scope(entry: LightPlacerEntry, worldspace_scope: str) -> bool:
     scope = worldspace_scope.strip().lower()
     if scope == "all":
@@ -310,13 +290,11 @@ def _entry_matches_worldspace_scope(entry: LightPlacerEntry, worldspace_scope: s
 
     has_interior = False
     has_exterior = False
-    for condition in _iter_conditions(entry.settings):
-        for match in _WORLDSPACE_COND_RE.finditer(condition):
-            equals_one = match.group(2) == "1"
-            if equals_one:
-                has_exterior = True
-            else:
-                has_interior = True
+    for is_exterior in iter_get_in_worldspace_states(entry.settings):
+        if is_exterior:
+            has_exterior = True
+        else:
+            has_interior = True
 
     if scope == "interior":
         return has_interior

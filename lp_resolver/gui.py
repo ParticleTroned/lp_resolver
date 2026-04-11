@@ -415,10 +415,12 @@ def _stylesheet_for_theme_variant(theme_variant: str) -> str:
 class _TooltipDelayProxyStyle(QProxyStyle):
     """Adds a tooltip wake-up delay and quickly exits tooltip mode between widgets."""
 
-    def __init__(self, base_style=None, wakeup_delay_ms: int = 1000, fall_asleep_delay_ms: int = 80) -> None:
+    def __init__(self, base_style=None, wakeup_delay_ms: int = 650, fall_asleep_delay_ms: int = 0) -> None:
         super().__init__(base_style)
         self._wakeup_delay_ms = max(0, int(wakeup_delay_ms))
-        self._fall_asleep_delay_ms = max(self._wakeup_delay_ms, int(fall_asleep_delay_ms))
+        # Keep wake-up and fall-asleep independent. Forcing fall-asleep >= wake-up
+        # keeps Qt in "hot" tooltip mode and causes immediate follow-up tooltips.
+        self._fall_asleep_delay_ms = max(0, int(fall_asleep_delay_ms))
         self._wakeup_hint = getattr(QStyle, "SH_ToolTip_WakeUpDelay", None)
         self._fall_asleep_hint = getattr(QStyle, "SH_ToolTip_FallAsleepDelay", None)
 
@@ -1388,7 +1390,7 @@ class MainWindow(QMainWindow):
         conflicts_panel.setMinimumWidth(180)
         details_panel.setMinimumWidth(220)
         controls.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
-        self.summary_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        self.summary_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         scan_panel.setMinimumWidth(0)
         scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         scan_panel.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -1427,8 +1429,8 @@ class MainWindow(QMainWindow):
 
     def _set_scan_summary_state(self, text: str, state: str) -> None:
         self.summary_label.setText(text)
-        self.summary_label.updateGeometry()
         if hasattr(self, "scan_panel"):
+            self._update_summary_label_height()
             self.scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         state_name = state if state in {"idle", "running", "success", "error"} else "idle"
         if str(self.summary_label.property("scanState") or "") == state_name:
@@ -1459,6 +1461,29 @@ class MainWindow(QMainWindow):
                 widget.setEnabled(state)
         if hasattr(self, "conflicts_table"):
             self.conflicts_table.setEnabled(state)
+
+    def _update_summary_label_height(self) -> None:
+        if not hasattr(self, "scan_panel"):
+            return
+        scan_layout = self.scan_panel.layout()
+        if scan_layout is None:
+            return
+        margins = scan_layout.contentsMargins()
+        summary_width = max(220, self.scan_panel.width() - margins.left() - margins.right())
+        label_margins = self.summary_label.contentsMargins()
+        single_line_height = (
+            self.summary_label.fontMetrics().lineSpacing()
+            + label_margins.top()
+            + label_margins.bottom()
+            + 4
+        )
+        required_height = self.summary_label.heightForWidth(summary_width)
+        if required_height <= 0:
+            required_height = single_line_height
+        required_height = max(single_line_height, required_height)
+        self.summary_label.setMinimumHeight(required_height)
+        self.summary_label.setMaximumHeight(required_height)
+        self.summary_label.updateGeometry()
 
     def _mark_as_dropdown(self, combo: QComboBox) -> None:
         tip = combo.toolTip().strip()
@@ -1593,6 +1618,15 @@ class MainWindow(QMainWindow):
         scope_combo.addItem("All", "all")
         scope_combo.addItem("Interior", "interior")
         scope_combo.addItem("Exterior", "exterior")
+        scope_combo.addItem("Unscoped", "unscoped")
+        scope_combo.setToolTip(
+            "LP worldspace scope filter.\n"
+            "- All: include all LP entries.\n"
+            "- Interior/Exterior: prefer explicit `GetInWorldspace ... == 0/1` conditions.\n"
+            "- If explicit scope is missing, a filename/path hint pass is used "
+            "(e.g. tokens like Interior/Exterior/ISL).\n"
+            "- Unscoped: include entries with no explicit/inferred worldspace scope."
+        )
         self._mark_as_dropdown(scope_combo)
         scope_index = scope_combo.findData(self._inventory_scope)
         if scope_index < 0:
@@ -1791,7 +1825,7 @@ class MainWindow(QMainWindow):
         if scope_index >= 0:
             self.light_scale_scope_combo.setCurrentIndex(scope_index)
         self.light_scale_portal_strict_cb.setChecked(light_scale_portal_strict_only)
-        if inventory_scope not in {"all", "interior", "exterior"}:
+        if inventory_scope not in {"all", "interior", "exterior", "unscoped"}:
             inventory_scope = "all"
         self._inventory_scope = inventory_scope
         self._inventory_portal_strict_only = inventory_portal_strict_only
@@ -2810,6 +2844,7 @@ class MainWindow(QMainWindow):
         if self._splitter_sizes_initialized:
             return
         self._splitter_sizes_initialized = True
+        self._update_summary_label_height()
         self.scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         total_width = max(1, self.content_splitter.size().width())
         left_target = max(360, min(int(total_width * 0.60), total_width - 300))
@@ -2823,16 +2858,19 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        self._update_summary_label_height()
         self.scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         self._compact_conflicts_columns()
         self._compact_details_controls()
 
     def _on_content_splitter_moved(self, _pos: int, _index: int) -> None:
+        self._update_summary_label_height()
         self.scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         self._compact_conflicts_columns()
         self._compact_details_controls()
 
     def _on_left_splitter_moved(self, _pos: int, _index: int) -> None:
+        self._update_summary_label_height()
         self.scan_panel.setMinimumHeight(self._compute_scan_panel_min_height())
         self._compact_conflicts_columns()
 
@@ -2842,16 +2880,23 @@ class MainWindow(QMainWindow):
             return 170
         margins = scan_layout.contentsMargins()
         controls_h = self.controls_group.sizeHint().height()
-        summary_h = self.summary_label.sizeHint().height()
         summary_width = max(220, self.scan_panel.width() - margins.left() - margins.right())
         wrapped_summary_h = self.summary_label.heightForWidth(summary_width)
-        if wrapped_summary_h > 0:
-            summary_h = max(summary_h, wrapped_summary_h)
+        label_margins = self.summary_label.contentsMargins()
+        single_line_summary_h = (
+            self.summary_label.fontMetrics().lineSpacing()
+            + label_margins.top()
+            + label_margins.bottom()
+            + 4
+        )
+        if wrapped_summary_h <= 0:
+            wrapped_summary_h = single_line_summary_h
+        summary_h = max(single_line_summary_h, wrapped_summary_h)
         spacing = max(0, scan_layout.spacing())
+        minimum = controls_h + single_line_summary_h + spacing + margins.top() + margins.bottom() + 6
         desired = controls_h + summary_h + spacing + margins.top() + margins.bottom() + 6
-        # Keep controls visible (including second button row) while still bounding
-        # growth on very narrow widths where wrapping can explode height.
-        return max(170, min(420, desired))
+        # Keep controls visible and allow summary to grow only when wrapping requires it.
+        return max(minimum, min(420, desired))
 
     def _fit_window_to_available_geometry(self) -> None:
         if self.isMaximized() or self.isFullScreen():
@@ -4700,6 +4745,51 @@ class MainWindow(QMainWindow):
             return
 
         filters = result.filter_summary
+        worldspace_scope = str(filters.get("worldspace_scope") or "all")
+        scoped_total = int(filters.get("worldspace_scoped_lp_entries") or 0)
+        scoped_interior = int(filters.get("worldspace_interior_only_lp_entries") or 0)
+        scoped_exterior = int(filters.get("worldspace_exterior_only_lp_entries") or 0)
+        scoped_mixed = int(filters.get("worldspace_mixed_lp_entries") or 0)
+        scoped_unscoped = int(filters.get("worldspace_unscoped_lp_entries") or 0)
+        explicit_interior = int(filters.get("worldspace_explicit_interior_only_lp_entries") or 0)
+        explicit_exterior = int(filters.get("worldspace_explicit_exterior_only_lp_entries") or 0)
+        explicit_mixed = int(filters.get("worldspace_explicit_mixed_lp_entries") or 0)
+        inferred_interior = int(filters.get("worldspace_inferred_interior_only_lp_entries") or 0)
+        inferred_exterior = int(filters.get("worldspace_inferred_exterior_only_lp_entries") or 0)
+        inferred_mixed = int(filters.get("worldspace_inferred_mixed_lp_entries") or 0)
+        lp_stage_total = int(filters.get("lp_stage_total") or 0)
+        lp_stage_after_scope = int(filters.get("lp_stage_after_scope") or 0)
+        lp_stage_after_scope_nif = int(filters.get("lp_stage_after_scope_nif") or 0)
+        lp_stage_after_scope_nif_portal = int(filters.get("lp_stage_after_scope_nif_portal") or 0)
+        worldspace_note = ""
+        if worldspace_scope in {"interior", "exterior", "unscoped"} and result.exported_lp_entry_count == 0:
+            if lp_stage_after_scope == 0:
+                if scoped_total == 0:
+                    worldspace_note = (
+                        "\n\nScope note: no LP entries in this scan expose "
+                        "`GetInWorldspace ... == 0/1` conditions.\n"
+                        "Interior/Exterior scope filters can therefore return 0 rows."
+                    )
+                else:
+                    worldspace_note = (
+                        "\n\nScope note: no LP entries matched the selected scope "
+                        "(after explicit + filename/path scope inference)."
+                    )
+            elif lp_stage_after_scope_nif == 0:
+                worldspace_note = (
+                    "\n\nScope note: scope-matching LP entries exist, but `NIF targets only` "
+                    "removed all of them."
+                )
+            elif lp_stage_after_scope_nif_portal == 0:
+                worldspace_note = (
+                    "\n\nScope note: scope-matching LP entries exist, but `PortalStrict only` "
+                    "removed all remaining rows."
+                )
+            elif bool(filters.get("conflicts_only")):
+                worldspace_note = (
+                    "\n\nScope note: rows remained after scope/NIF/PortalStrict filtering, "
+                    "but `Conflicts only` removed them."
+                )
         QMessageBox.information(
             self,
             "Export Results",
@@ -4716,7 +4806,17 @@ class MainWindow(QMainWindow):
                 f"Filters: scope={filters.get('worldspace_scope')}, "
                 f"portalStrictOnly={filters.get('portal_strict_only')}, "
                 f"nifOnly={filters.get('nif_only')}, "
-                f"conflictsOnly={filters.get('conflicts_only')}"
+                f"conflictsOnly={filters.get('conflicts_only')}\n"
+                f"LP worldspace coverage: scoped={scoped_total} "
+                f"(interior={scoped_interior}, exterior={scoped_exterior}, mixed={scoped_mixed}), "
+                f"unscoped={scoped_unscoped}\n"
+                f"scope-source split: explicit(i/e/m)={explicit_interior}/{explicit_exterior}/{explicit_mixed}, "
+                f"inferred(i/e/m)={inferred_interior}/{inferred_exterior}/{inferred_mixed}\n"
+                f"LP filter stages: total={lp_stage_total} -> scope={lp_stage_after_scope} "
+                f"-> scope+nif={lp_stage_after_scope_nif} "
+                f"-> scope+nif+portal={lp_stage_after_scope_nif_portal} "
+                f"-> exported={result.exported_lp_entry_count}"
+                f"{worldspace_note}"
             ),
         )
 
