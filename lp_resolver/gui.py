@@ -2785,12 +2785,22 @@ class MainWindow(QMainWindow):
         selected_paths = self._selected_nif_paths()
         return selected_paths[0] if selected_paths else None
 
-    def _restore_conflict_selection(self, nif_path: str | None) -> bool:
+    def _restore_conflict_selection(
+        self,
+        nif_path: str | None,
+        *,
+        scroll_hint: QAbstractItemView.ScrollHint = QAbstractItemView.PositionAtCenter,
+    ) -> bool:
         if nif_path is None:
             return False
-        return self._restore_conflict_selections([nif_path])
+        return self._restore_conflict_selections([nif_path], scroll_hint=scroll_hint)
 
-    def _restore_conflict_selections(self, nif_paths: list[str] | None) -> bool:
+    def _restore_conflict_selections(
+        self,
+        nif_paths: list[str] | None,
+        *,
+        scroll_hint: QAbstractItemView.ScrollHint = QAbstractItemView.PositionAtCenter,
+    ) -> bool:
         if not nif_paths:
             return False
         wanted = {path for path in nif_paths if isinstance(path, str) and path}
@@ -2822,13 +2832,29 @@ class MainWindow(QMainWindow):
 
         selection_model.setCurrentIndex(first_index, QItemSelectionModel.NoUpdate)
         if first_item is not None:
-            self.conflicts_table.scrollToItem(first_item, QAbstractItemView.PositionAtCenter)
+            self.conflicts_table.scrollToItem(first_item, scroll_hint)
         return True
+
+    def _select_first_conflict_row(
+        self,
+        *,
+        scroll_hint: QAbstractItemView.ScrollHint = QAbstractItemView.PositionAtCenter,
+    ) -> bool:
+        if self.conflicts_table.rowCount() <= 0:
+            return False
+        self.conflicts_table.setCurrentCell(0, 0)
+        self.conflicts_table.selectRow(0)
+        first_item = self.conflicts_table.item(0, 0)
+        if first_item is not None:
+            self.conflicts_table.scrollToItem(first_item, scroll_hint)
+            return True
+        return False
 
     def _populate_conflicts_table(
         self,
         preserve_nif_path: str | None = None,
         preserve_nif_paths: list[str] | None = None,
+        preserve_scroll_hint: QAbstractItemView.ScrollHint = QAbstractItemView.PositionAtCenter,
     ) -> bool:
         if preserve_nif_paths is None:
             if preserve_nif_path is not None:
@@ -2888,23 +2914,30 @@ class MainWindow(QMainWindow):
                     self.conflicts_table.setItem(row, col, item)
 
             self._compact_conflicts_columns()
-            restored = self._restore_conflict_selections(preserve_nif_paths)
-            should_refresh_selection = restored
-            if not restored and self.conflicts_table.rowCount() > 0:
-                self.conflicts_table.setCurrentCell(0, 0)
-                self.conflicts_table.selectRow(0)
-                first_item = self.conflicts_table.item(0, 0)
-                if first_item is not None:
-                    self.conflicts_table.scrollToItem(first_item, QAbstractItemView.PositionAtCenter)
-                    should_refresh_selection = True
-            return restored
+            if not sorting_was_enabled:
+                restored = self._restore_conflict_selections(
+                    preserve_nif_paths,
+                    scroll_hint=preserve_scroll_hint,
+                )
+                should_refresh_selection = restored
+                if not restored:
+                    should_refresh_selection = self._select_first_conflict_row(scroll_hint=preserve_scroll_hint)
         finally:
             self.conflicts_table.setSortingEnabled(sorting_was_enabled)
+            if sorting_was_enabled:
+                restored = self._restore_conflict_selections(
+                    preserve_nif_paths,
+                    scroll_hint=preserve_scroll_hint,
+                )
+                should_refresh_selection = restored
+                if not restored:
+                    should_refresh_selection = self._select_first_conflict_row(scroll_hint=preserve_scroll_hint)
             self.conflicts_table.setUpdatesEnabled(updates_were_enabled)
             self.conflicts_table.blockSignals(signals_were_blocked)
             self._updating_conflicts_table = False
             if should_refresh_selection:
                 self.on_conflict_selection_changed()
+        return restored
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -4632,7 +4665,12 @@ class MainWindow(QMainWindow):
                 entry_ids=selected_entry_ids if action == "choose_entry" else None,
             )
 
-        self._populate_conflicts_table(preserve_nif_paths=selected_nifs)
+        scroll_hint = (
+            QAbstractItemView.PositionAtTop
+            if len(selected_nifs) == 1
+            else QAbstractItemView.PositionAtCenter
+        )
+        self._populate_conflicts_table(preserve_nif_paths=selected_nifs, preserve_scroll_hint=scroll_hint)
 
     def clear_decision_for_selected(self) -> None:
         conflicts = self._selected_conflicts()
@@ -4643,7 +4681,12 @@ class MainWindow(QMainWindow):
         for conflict in conflicts:
             self.decisions.pop(conflict.nif_path_canonical, None)
 
-        self._populate_conflicts_table(preserve_nif_paths=selected_nifs)
+        scroll_hint = (
+            QAbstractItemView.PositionAtTop
+            if len(selected_nifs) == 1
+            else QAbstractItemView.PositionAtCenter
+        )
+        self._populate_conflicts_table(preserve_nif_paths=selected_nifs, preserve_scroll_hint=scroll_hint)
 
     def clear_all_decisions(self) -> None:
         if not self.decisions:
