@@ -66,7 +66,6 @@ try:
         QTextEdit,
         QVBoxLayout,
         QWidget,
-        QWidgetAction,
         QSlider,
     )
 except Exception as exc:  # noqa: BLE001
@@ -1353,7 +1352,7 @@ class MainWindow(QMainWindow):
         self._is_closing = False
         self._system_theme_signal_connected = False
         self._conflict_min_widths = [72, 64, 72, 32, 32, 72]
-        self._light_scale_menu: QMenu | None = None
+        self._light_scale_menu: QDialog | None = None
         self._formid_world_resolution_cache: dict[str, FormIDWorldResolution] = {}
         self._inventory_scope = "all"
         self._inventory_portal_strict_only = False
@@ -1503,9 +1502,11 @@ class MainWindow(QMainWindow):
         combo.setMaximumWidth(target_width)
 
     def _build_light_scale_menu(self) -> None:
-        self._light_scale_menu = QMenu(self)
-        menu_host = QWidget(self._light_scale_menu)
-        menu_layout = QVBoxLayout(menu_host)
+        self._light_scale_menu = QDialog(self, Qt.Tool)
+        self._light_scale_menu.setWindowTitle("Light Scale")
+        self._light_scale_menu.setModal(False)
+        self._light_scale_menu.setWindowModality(Qt.NonModal)
+        menu_layout = QVBoxLayout(self._light_scale_menu)
         menu_layout.setContentsMargins(10, 10, 10, 10)
         menu_layout.setSpacing(6)
 
@@ -1568,10 +1569,6 @@ class MainWindow(QMainWindow):
         note.setObjectName("lightScaleNoteLabel")
         menu_layout.addWidget(note)
 
-        action = QWidgetAction(self._light_scale_menu)
-        action.setDefaultWidget(menu_host)
-        self._light_scale_menu.addAction(action)
-        self._light_scale_menu.setToolTipsVisible(True)
         self._light_scale_menu.setMinimumWidth(360)
 
         self.light_scale_enabled_cb.toggled.connect(self._on_light_scale_options_changed)
@@ -1584,8 +1581,15 @@ class MainWindow(QMainWindow):
     def _show_light_scale_menu(self) -> None:
         if self._light_scale_menu is None:
             return
+        if self._light_scale_menu.isVisible():
+            self._light_scale_menu.hide()
+            return
         anchor = self.light_scale_menu_btn.mapToGlobal(self.light_scale_menu_btn.rect().bottomLeft())
-        self._light_scale_menu.popup(anchor)
+        self._light_scale_menu.adjustSize()
+        self._light_scale_menu.move(anchor)
+        self._light_scale_menu.show()
+        self._light_scale_menu.raise_()
+        self._light_scale_menu.activateWindow()
 
     def _inventory_export_config(self) -> InventoryExportConfig:
         return InventoryExportConfig(
