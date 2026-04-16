@@ -1,5 +1,5 @@
 # Placed Lights and Particle Lights Conflict Resolver  
-Version: 0.2.3
+Version: 0.2.4
 
 This guide is for first-time users. It explains what the tool changes, how mod load order affects results (MO2 or Vortex), and how to export a safe patch.
 
@@ -47,7 +47,32 @@ Important:
 
 ---
 
-## 2. Before You Start (Order Basics: MO2 and Vortex)
+## 2. Installation
+
+LP Conflict Resolver is a standalone tool. Do not install it like a normal mod through the MO2 or Vortex install function.
+
+There are two supported setup options:
+
+1. `Vortex` and `MO2`: Extract the archive to any folder on your computer. It does not need to be inside your MO2 or Vortex folders. Open the extracted folder, then double-click `LPConflictResolver.exe` to start the program. After that, continue with the instructions in this manual.
+2. `MO2 only`: If you want to launch the tool directly from MO2, extract the archive into your MO2 `tools` folder, for example `C:\YOURMODLIST\tools\Lights Conflict Resolver\LPConflictResolver`.
+
+For the `MO2 only` setup:
+
+1. Open MO2.
+2. Click the small arrow to the left of the `Run` button and choose `Edit...`.
+3. In `Binary`, browse to `LPConflictResolver.exe`, for example `C:\YOURMODLIST\tools\Lights Conflict Resolver\LPConflictResolver\LPConflictResolver.exe`.
+4. In `Start in`, select the folder that contains `LPConflictResolver.exe`, for example `C:\YOURMODLIST\tools\Lights Conflict Resolver\LPConflictResolver`.
+5. Click `Apply`.
+6. You can now select `LPConflictResolver` from the drop-down next to the `Run` button and launch it directly through MO2.
+7. After you finish conflict resolution and patch export, switch the MO2 run target back to your normal game launcher, for example `SKSE`.
+
+This `MO2 only` variant is useful for modlist authors who want to ship the tool with their list.
+
+![MO2 Tool Setup](images/tools-mo2.png)
+
+---
+
+## 3. Before You Start (Order Basics: MO2 and Vortex)
 
 If two enabled mods provide the same loose file path, only one is effective:
 
@@ -67,7 +92,7 @@ Vortex priority note (important):
 
 ---
 
-## 3. Quick Start (Recommended Workflow)
+## 4. Quick Start (Recommended Workflow)
 
 1. Open the app.
 2. Set:
@@ -128,7 +153,7 @@ Vortex priority note (important):
 
 ---
 
-## 4. UI Areas (with Screenshot Placeholders)
+## 5. UI Areas (with Screenshot Placeholders)
 
 ### A) Scan And Output panel
 
@@ -177,7 +202,7 @@ If screenshots are not available yet, keep these image links as placeholders and
 
 ---
 
-## 5. Settings Reference (Practical)
+## 6. Settings Reference (Practical)
 
 `Light Source`
 
@@ -263,7 +288,7 @@ If screenshots are not available yet, keep these image links as placeholders and
 
 ---
 
-## 6. Light Scale Patch (Detailed)
+## 7. Light Scale Patch (Detailed)
 
 The `Light Scale` feature creates a second patch after normal conflict resolution.  
 Use it when you want global brightness tuning across effective LP winner files, not only conflict rows.
@@ -302,7 +327,7 @@ Practical tuning workflow:
 
 ---
 
-## 7. Conflict Types (How to Interpret)
+## 8. Conflict Types (How to Interpret)
 
 `Overlap`
 
@@ -331,7 +356,7 @@ Practical tuning workflow:
 
 ---
 
-## 8. What Export Actually Writes
+## 9. What Export Actually Writes
 
 Export creates patch files under your patch mod folder:
 
@@ -359,7 +384,7 @@ Behavior:
 
 ---
 
-## 9. Safety / Rollback
+## 10. Safety / Rollback
 
 To revert fully:
 
@@ -373,7 +398,7 @@ Tip:
 
 ---
 
-## 10. Common Parse/Preview Messages
+## 11. Common Parse/Preview Messages
 
 `No extractable LP targets found`
 
