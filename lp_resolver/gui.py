@@ -1275,10 +1275,12 @@ class FormIDResolutionWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            thread = QThread.currentThread()
             result = resolve_formid_world_resolution(
                 self.mods_dir,
                 self.profile_path,
                 self.target_key,
+                is_cancelled=thread.isInterruptionRequested,
             )
             self.finished.emit(self.request_id, self.target_key, result)
         except Exception as exc:  # noqa: BLE001
@@ -2735,6 +2737,7 @@ class MainWindow(QMainWindow):
         self.scan_btn.setEnabled(False)
         thread = self._worker_thread
         if thread is not None and thread.isRunning():
+            thread.requestInterruption()
             thread.quit()
             # Avoid leaving an active worker thread during shutdown.
             if not thread.wait(30000):
@@ -2750,8 +2753,10 @@ class MainWindow(QMainWindow):
                 return
         formid_thread = self._formid_worker_thread
         if formid_thread is not None and formid_thread.isRunning():
+            formid_thread.requestInterruption()
+            self._formid_request_pending_target = None
             formid_thread.quit()
-            if not formid_thread.wait(30000):
+            if not formid_thread.wait(5000):
                 QMessageBox.warning(
                     self,
                     "FormID Preview Busy",

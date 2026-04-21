@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import configparser
 import math
 import os
@@ -25,6 +26,7 @@ _GAME_DATA_ENV_VARS = (
     "SKYRIMSE_DATA_DIR",
     "SKYRIM_SPECIAL_EDITION_DATA",
 )
+_CancelCheck = Callable[[], bool]
 
 
 @dataclass(frozen=True)
@@ -108,11 +110,13 @@ def _canonical_form_id_from_raw(raw_form_id: int, plugin_name: str, masters: tup
     return f"formid:{source_plugin}:{local_form_id:x}"
 
 
-def _iter_plugin_subrecords(payload: bytes):
+def _iter_plugin_subrecords(payload: bytes, is_cancelled: _CancelCheck | None = None):
     pos = 0
     extended_size: int | None = None
     total = len(payload)
     while pos + 6 <= total:
+        if is_cancelled is not None and is_cancelled():
+            return
         name = payload[pos : pos + 4].decode("ascii", errors="ignore")
         size = struct.unpack_from("<H", payload, pos + 4)[0]
         pos += 6
@@ -132,9 +136,16 @@ def _iter_plugin_subrecords(payload: bytes):
         yield name, data
 
 
-def _iter_plugin_records_in_range(raw: bytes, start: int, end: int):
+def _iter_plugin_records_in_range(
+    raw: bytes,
+    start: int,
+    end: int,
+    is_cancelled: _CancelCheck | None = None,
+):
     pos = start
     while pos + 4 <= end:
+        if is_cancelled is not None and is_cancelled():
+            return
         tag = raw[pos : pos + 4]
         if tag == b"GRUP":
             if pos + 24 > end:
@@ -144,7 +155,7 @@ def _iter_plugin_records_in_range(raw: bytes, start: int, end: int):
             if group_size < 24 or group_end > end:
                 return
             # GRUP payload begins immediately after the 24-byte GRUP header.
-            yield from _iter_plugin_records_in_range(raw, pos + 24, group_end)
+            yield from _iter_plugin_records_in_range(raw, pos + 24, group_end, is_cancelled=is_cancelled)
             pos = group_end
             continue
 
@@ -173,8 +184,8 @@ def _iter_plugin_records_in_range(raw: bytes, start: int, end: int):
         yield record_type, form_id_raw, payload
 
 
-def _iter_plugin_records(raw: bytes):
-    yield from _iter_plugin_records_in_range(raw, 0, len(raw))
+def _iter_plugin_records(raw: bytes, is_cancelled: _CancelCheck | None = None):
+    yield from _iter_plugin_records_in_range(raw, 0, len(raw), is_cancelled=is_cancelled)
 
 
 def _find_record_in_plugin(
@@ -184,9 +195,12 @@ def _find_record_in_plugin(
     mode: str,
     mtime_ns: int,
     file_size: int,
+    is_cancelled: _CancelCheck | None = None,
 ) -> _RecordMatch | None:
     # mtime_ns and file_size are intentionally part of cache key.
     _ = (mtime_ns, file_size)
+    if is_cancelled is not None and is_cancelled():
+        return None
     path = Path(plugin_path)
     if not path.exists() or not path.is_file():
         return None
@@ -197,10 +211,12 @@ def _find_record_in_plugin(
 
     masters: tuple[str, ...] = tuple()
     candidate: _RecordMatch | None = None
-    for record_type, form_id_raw, payload in _iter_plugin_records(raw):
+    for record_type, form_id_raw, payload in _iter_plugin_records(raw, is_cancelled=is_cancelled):
+        if is_cancelled is not None and is_cancelled():
+            return None
         if record_type == "TES4":
             mast_entries: list[str] = []
-            for name, data in _iter_plugin_subrecords(payload):
+            for name, data in _iter_plugin_subrecords(payload, is_cancelled=is_cancelled):
                 if name == "MAST":
                     plugin = _normalize_plugin_name(_decode_subrecord_text(data))
                     if plugin:
@@ -219,7 +235,7 @@ def _find_record_in_plugin(
             position: tuple[float, float, float] | None = None
             rotation_deg: tuple[float, float, float] | None = None
             scale: float | None = None
-            for name, data in _iter_plugin_subrecords(payload):
+            for name, data in _iter_plugin_subrecords(payload, is_cancelled=is_cancelled):
                 if name == "NAME" and len(data) >= 4:
                     base_raw = struct.unpack_from("<I", data, 0)[0]
                     base_form_key = _canonical_form_id_from_raw(base_raw, plugin_name, masters)
@@ -241,7 +257,7 @@ def _find_record_in_plugin(
 
         if mode == "model":
             model_path: str | None = None
-            for name, data in _iter_plugin_subrecords(payload):
+            for name, data in _iter_plugin_subrecords(payload, is_cancelled=is_cancelled):
                 if name in _MODEL_SUBRECORDS:
                     text = _decode_subrecord_text(data)
                     if text:
@@ -549,19 +565,27 @@ def _resolve_plugin_file(
     plugin_name: str,
     enabled_mods: tuple,
     data_dirs: tuple[str, ...],
+    is_cancelled: _CancelCheck | None = None,
 ) -> Path | None:
     for mod in enabled_mods:
+        if is_cancelled is not None and is_cancelled():
+            return None
         for root in (mod.path, mod.path / "Data"):
             if match := _find_plugin_file_in_root(root, plugin_name):
                 return match
     for raw_data_dir in data_dirs:
+        if is_cancelled is not None and is_cancelled():
+            return None
         if match := _find_plugin_file_in_root(Path(raw_data_dir), plugin_name):
             return match
     return None
 
 
-@lru_cache(maxsize=8)
-def _active_plugin_sources_with_issue(profile_path: str, mods_dir: str) -> tuple[tuple[tuple[str, str], ...], str | None]:
+def _active_plugin_sources_with_issue_impl(
+    profile_path: str,
+    mods_dir: str,
+    is_cancelled: _CancelCheck | None = None,
+) -> tuple[tuple[tuple[str, str], ...], str | None]:
     plugin_order = _active_plugin_order(profile_path)
     if not plugin_order:
         return (tuple(), "No plugins found in plugins.txt/loadorder.txt.")
@@ -571,7 +595,9 @@ def _active_plugin_sources_with_issue(profile_path: str, mods_dir: str) -> tuple
     resolved: list[tuple[str, str]] = []
     missing: list[str] = []
     for plugin_name in plugin_order:
-        plugin_path = _resolve_plugin_file(plugin_name, enabled_mods, data_dirs)
+        if is_cancelled is not None and is_cancelled():
+            return (tuple(), "Resolution cancelled before plugin source discovery finished.")
+        plugin_path = _resolve_plugin_file(plugin_name, enabled_mods, data_dirs, is_cancelled=is_cancelled)
         if plugin_path is None:
             missing.append(plugin_name)
             continue
@@ -592,6 +618,11 @@ def _active_plugin_sources_with_issue(profile_path: str, mods_dir: str) -> tuple
     return (tuple(resolved), None)
 
 
+@lru_cache(maxsize=8)
+def _active_plugin_sources_with_issue(profile_path: str, mods_dir: str) -> tuple[tuple[tuple[str, str], ...], str | None]:
+    return _active_plugin_sources_with_issue_impl(profile_path, mods_dir, is_cancelled=None)
+
+
 def clear_formid_preview_caches() -> None:
     _find_record_in_plugin_cached.cache_clear()
     _active_plugin_order.cache_clear()
@@ -605,21 +636,35 @@ def _resolve_winning_record(
     plugin_sources: tuple[tuple[str, str], ...],
     target_key: str,
     mode: str,
+    is_cancelled: _CancelCheck | None = None,
 ) -> _RecordMatch | None:
     for plugin_name, plugin_path in reversed(plugin_sources):
+        if is_cancelled is not None and is_cancelled():
+            return None
         path = Path(plugin_path)
         try:
             stat = path.stat()
         except OSError:
             continue
-        match = _find_record_in_plugin_cached(
-            plugin_path=plugin_path,
-            plugin_name=plugin_name,
-            target_key=target_key,
-            mode=mode,
-            mtime_ns=stat.st_mtime_ns,
-            file_size=stat.st_size,
-        )
+        if is_cancelled is None:
+            match = _find_record_in_plugin_cached(
+                plugin_path=plugin_path,
+                plugin_name=plugin_name,
+                target_key=target_key,
+                mode=mode,
+                mtime_ns=stat.st_mtime_ns,
+                file_size=stat.st_size,
+            )
+        else:
+            match = _find_record_in_plugin(
+                plugin_path=plugin_path,
+                plugin_name=plugin_name,
+                target_key=target_key,
+                mode=mode,
+                mtime_ns=stat.st_mtime_ns,
+                file_size=stat.st_size,
+                is_cancelled=is_cancelled,
+            )
         if match is not None:
             return match
     return None
@@ -629,7 +674,17 @@ def resolve_formid_world_resolution(
     mods_dir: str,
     profile_path: str,
     target_key: str,
+    is_cancelled: _CancelCheck | None = None,
 ) -> FormIDWorldResolution:
+    def _cancelled_resolution() -> FormIDWorldResolution:
+        return FormIDWorldResolution(
+            status="cancelled",
+            detail="FormID world preview resolution cancelled.",
+            context=None,
+        )
+
+    if is_cancelled is not None and is_cancelled():
+        return _cancelled_resolution()
     parsed = _split_target_key(target_key)
     if parsed is None:
         return FormIDWorldResolution(
@@ -656,7 +711,16 @@ def resolve_formid_world_resolution(
             context=None,
         )
 
-    plugin_sources, source_issue = _active_plugin_sources_with_issue(profile_path, mods_dir)
+    if is_cancelled is None:
+        plugin_sources, source_issue = _active_plugin_sources_with_issue(profile_path, mods_dir)
+    else:
+        plugin_sources, source_issue = _active_plugin_sources_with_issue_impl(
+            profile_path,
+            mods_dir,
+            is_cancelled=is_cancelled,
+        )
+    if is_cancelled is not None and is_cancelled():
+        return _cancelled_resolution()
     source_issue_suffix = f" Source warning: {source_issue}" if source_issue else ""
     if not plugin_sources:
         return FormIDWorldResolution(
@@ -683,7 +747,14 @@ def resolve_formid_world_resolution(
             context=None,
         )
 
-    reference = _resolve_winning_record(plugin_sources, canonical_target, mode="reference")
+    reference = _resolve_winning_record(
+        plugin_sources,
+        canonical_target,
+        mode="reference",
+        is_cancelled=is_cancelled,
+    )
+    if is_cancelled is not None and is_cancelled():
+        return _cancelled_resolution()
     if reference is None:
         return FormIDWorldResolution(
             status="reference_not_found",
@@ -710,7 +781,14 @@ def resolve_formid_world_resolution(
     base_model_path: str | None = None
     base_model_source_plugin: str | None = None
     if reference.base_form_key:
-        base_record = _resolve_winning_record(plugin_sources, reference.base_form_key, mode="model")
+        base_record = _resolve_winning_record(
+            plugin_sources,
+            reference.base_form_key,
+            mode="model",
+            is_cancelled=is_cancelled,
+        )
+        if is_cancelled is not None and is_cancelled():
+            return _cancelled_resolution()
         if base_record is not None and base_record.model_path:
             raw_model_path = base_record.model_path.replace("\\", "/").strip()
             canonical_model_path = canonical_nif(raw_model_path)
