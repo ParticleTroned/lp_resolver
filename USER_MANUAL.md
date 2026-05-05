@@ -103,6 +103,7 @@ Vortex priority note (important):
 3. Path selection details:
 - MO2 root example: `C:\Path\To\MO2` (normally contains `mods` and `profiles`).
 - MO2 alternate mods folder example: set `Mods Folder Override` to `C:\Path\To\deployments` or the linked folder that directly contains installed mod folders.
+- With `Mods Folder Override` set for an MO2 profile scan, `MO2 Root/Vortex mod staging folder` can be left blank.
 - Vortex staging folder example: `E:\modding\vortex` (the folder where deployed mod folders live).
 - MO2 profile path must contain `modlist.txt`.
 - Vortex profile path example: `C:\Users\<user>\AppData\Roaming\Vortex\skyrimse\profiles\<ProfileId>` and should contain `plugins.txt` and `loadorder.txt`.

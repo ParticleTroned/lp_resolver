@@ -81,7 +81,8 @@ python -m lp_resolver --gui
 ```
 
 In GUI mode, use `Mods Folder Override` when an MO2 profile's installed mod folders live outside the usual
-`<MO2 Root>\mods` path, such as a linked folder or `deployments` directory.
+`<MO2 Root>\mods` path, such as a linked folder or `deployments` directory. For MO2 profile scans with an
+override set, the MO2 Root field can be left blank.
 
 CLI example:
 
@@ -104,6 +105,8 @@ python -m lp_resolver `
   --output-dir "dist\lp_resolver" `
   --pl-source nif
 ```
+
+When both `--profile-path` and `--mods-dir` are explicit for an MO2 scan, `--mo2-root` can be omitted.
 
 CLI Vortex profile example:
 
