@@ -45,7 +45,7 @@ See the detailed install/build/run steps in the sections below.
 - Windows (for packaged EXE workflow)
 - Linux/SteamOS (for source/Python workflow)
 - Python 3.10+
-- Mod Organizer 2 setup with `mods/` and `profiles/`, or
+- Mod Organizer 2 profile plus a mods folder resolved from MO2 root/`ModOrganizer.ini` or `--mods-dir`, or
 - Vortex profile + staging mods directory
 
 ## Install From Source
@@ -80,6 +80,9 @@ or:
 python -m lp_resolver --gui
 ```
 
+In GUI mode, use `Mods Folder Override` when an MO2 profile's installed mod folders live outside the usual
+`<MO2 Root>\mods` path, such as a linked folder or `deployments` directory.
+
 CLI example:
 
 ```powershell
@@ -89,6 +92,17 @@ python -m lp_resolver `
   --output-dir "dist\lp_resolver" `
   --pl-source nif `
   --verbose
+```
+
+If your MO2 installed mods are outside `<MO2 Root>\mods`, pass the actual folder:
+
+```powershell
+python -m lp_resolver `
+  --mo2-root "C:\Path\To\MO2" `
+  --profile-path "C:\Path\To\MO2\profiles\YourProfile" `
+  --mods-dir "C:\Path\To\deployments" `
+  --output-dir "dist\lp_resolver" `
+  --pl-source nif
 ```
 
 CLI Vortex profile example:

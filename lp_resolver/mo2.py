@@ -29,6 +29,8 @@ def resolve_mods_dir(mo2_root: Path, explicit_mods_dir: Path | None = None) -> P
         resolved = explicit_mods_dir.expanduser().resolve()
         if not resolved.exists():
             raise FileNotFoundError(f"Mods directory does not exist: {resolved}")
+        if not resolved.is_dir():
+            raise NotADirectoryError(f"Mods directory is not a directory: {resolved}")
         return resolved
 
     ini_path = mo2_root / "ModOrganizer.ini"

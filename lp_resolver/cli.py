@@ -21,13 +21,18 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("."),
         help=(
-            "Path to MO2 root (contains mods/, profiles/) for MO2 profiles. "
+            "Path to MO2 root (normally contains mods/, profiles/) for MO2 profiles. "
+            "Use --mods-dir when installed mods live elsewhere. "
             "For Vortex profile scans this can be omitted."
         ),
     )
     parser.add_argument("--profile", type=str, help="MO2 profile name (under profiles/).")
     parser.add_argument("--profile-path", type=Path, help="Explicit profile directory path.")
-    parser.add_argument("--mods-dir", type=Path, help="Explicit mods directory path override.")
+    parser.add_argument(
+        "--mods-dir",
+        type=Path,
+        help="Explicit installed mods directory override, for MO2/Vortex setups that do not use the default mods path.",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,

@@ -1808,6 +1808,7 @@ class MainWindow(QMainWindow):
     def _load_persistent_paths(self) -> None:
         settings = self._settings()
         mo2_root = settings.value("paths/mo2_root", "", str).strip()
+        mods_dir = settings.value("paths/mods_dir", "", str).strip()
         profile_path = settings.value("paths/profile_path", "", str).strip()
         output_dir = settings.value("paths/output_dir", "", str).strip()
         patch_name = settings.value("paths/patch_name", "", str).strip()
@@ -1833,6 +1834,8 @@ class MainWindow(QMainWindow):
 
         if mo2_root:
             self.mo2_root_edit.setText(mo2_root)
+        if mods_dir:
+            self.mods_dir_edit.setText(mods_dir)
         if profile_path:
             self.profile_path_edit.setText(profile_path)
         if output_dir:
@@ -1871,6 +1874,7 @@ class MainWindow(QMainWindow):
     def _save_persistent_paths(self) -> None:
         settings = self._settings()
         settings.setValue("paths/mo2_root", self.mo2_root_edit.text().strip())
+        settings.setValue("paths/mods_dir", self.mods_dir_edit.text().strip())
         settings.setValue("paths/profile_path", self.profile_path_edit.text().strip())
         settings.setValue("paths/output_dir", self.output_dir_edit.text().strip())
         settings.setValue("paths/patch_name", self.patch_name_edit.text().strip())
@@ -1949,13 +1953,18 @@ class MainWindow(QMainWindow):
                 f"Details: {detail}"
             )
 
-        if "mods directory does not exist" in lowered or "could not resolve mods directory" in lowered:
+        if (
+            "mods directory does not exist" in lowered
+            or "mods directory is not a directory" in lowered
+            or "could not resolve mods directory" in lowered
+        ):
             return (
                 "The mods directory could not be resolved from your setup.\n\n"
                 "How to fix:\n"
                 "1. MO2: set MO2 Root to your Mod Organizer 2 folder.\n"
-                "2. Vortex: set MO2 Root to your Vortex staging mods folder (or ensure Vortex state has installPath).\n"
-                "3. Retry scan.\n\n"
+                "2. If your MO2 mods are stored elsewhere, set Mods Folder Override to that folder.\n"
+                "3. Vortex: set MO2 Root to your Vortex staging mods folder (or ensure Vortex state has installPath).\n"
+                "4. Retry scan.\n\n"
                 f"Details: {detail}"
             )
 
@@ -2015,8 +2024,17 @@ class MainWindow(QMainWindow):
         self.mo2_root_edit.setPlaceholderText("C:\\Path\\To\\MO2  (or E:\\modding\\vortex)")
         self.mo2_root_edit.setToolTip(
             "For MO2: root folder containing 'mods/' and 'profiles/'.\n"
+            "If your MO2 mods are in another folder, use Mods Folder Override below.\n"
+            "When Mods Folder Override is set, this field can be left blank for MO2 profile scans.\n"
             "For Vortex: staging mods folder (for example E:\\modding\\vortex).\n"
             "Example MO2: C:\\Path\\To\\MO2"
+        )
+        self.mods_dir_edit = QLineEdit("")
+        self.mods_dir_edit.setPlaceholderText("Optional: C:\\Path\\To\\MO2\\mods  or  C:\\Path\\To\\deployments")
+        self.mods_dir_edit.setToolTip(
+            "Optional explicit folder containing installed mod folders.\n"
+            "Use this for MO2 setups where mods are outside the MO2 root, renamed, linked, or stored in deployments/.\n"
+            "Leave blank to auto-resolve from ModOrganizer.ini or <MO2 Root>\\mods."
         )
         self.profile_path_edit = QLineEdit("")
         self.profile_path_edit.setPlaceholderText("MO2\\profiles\\<Profile>  or  Vortex\\<game>\\profiles\\<id>")
@@ -2035,7 +2053,7 @@ class MainWindow(QMainWindow):
         self._ensure_output_dir_exists(self._resolve_output_dir_text(self.output_dir_edit.text().strip()))
         self.patch_name_edit = QLineEdit("LP_ConflictPatch")
         self.patch_name_edit.setToolTip(
-            "Name of exported patch mod folder under MO2 mods/.\n"
+            "Name of exported patch mod folder under the resolved mods folder.\n"
             "Used on export, not during scan."
         )
         self.light_scale_menu_btn = QPushButton("Light Scale")
@@ -2046,6 +2064,7 @@ class MainWindow(QMainWindow):
         self.light_scale_menu_btn.clicked.connect(self._show_light_scale_menu)
         self._build_light_scale_menu()
         self.mo2_root_edit.editingFinished.connect(self._save_persistent_paths)
+        self.mods_dir_edit.editingFinished.connect(self._save_persistent_paths)
         self.profile_path_edit.editingFinished.connect(self._save_persistent_paths)
         self.output_dir_edit.editingFinished.connect(self._save_persistent_paths)
         self.patch_name_edit.editingFinished.connect(self._save_persistent_paths)
@@ -2143,12 +2162,15 @@ class MainWindow(QMainWindow):
         self.theme_mode_combo.currentIndexChanged.connect(self._on_theme_mode_changed)
 
         browse_mo2_btn = QPushButton("Browse")
+        browse_mods_dir_btn = QPushButton("Browse")
         browse_profile_btn = QPushButton("Browse")
         browse_output_btn = QPushButton("Browse")
         browse_mo2_btn.setToolTip("Browse to MO2 root folder or Vortex staging mods folder.")
+        browse_mods_dir_btn.setToolTip("Browse to an explicit mods folder override.")
         browse_profile_btn.setToolTip("Browse to profile path folder.")
         browse_output_btn.setToolTip("Browse to report output folder.")
         browse_mo2_btn.clicked.connect(lambda: self._browse_directory(self.mo2_root_edit))
+        browse_mods_dir_btn.clicked.connect(lambda: self._browse_directory(self.mods_dir_edit))
         browse_profile_btn.clicked.connect(lambda: self._browse_directory(self.profile_path_edit))
         browse_output_btn.clicked.connect(lambda: self._browse_directory(self.output_dir_edit))
 
@@ -2169,7 +2191,7 @@ class MainWindow(QMainWindow):
         self.save_decisions_btn.setToolTip("Save current decisions to JSON.")
         self.export_patch_btn.setToolTip(
             "Generate patch mod JSON from current decisions.\n"
-            "Writes overrides at original LightPlacer source paths under MO2 mods/<PatchName>/\n"
+            "Writes overrides at original LightPlacer source paths under the resolved mods folder/<PatchName>/\n"
             "so MO2 last-wins behavior applies.\n"
             "If Light Scale is enabled, export also writes a second patch mod:\n"
             "<PatchName>_LightIntensityPatch (place it after the first patch).\n"
@@ -2220,18 +2242,21 @@ class MainWindow(QMainWindow):
         grid.addWidget(mods_root_label, 0, 0)
         grid.addWidget(self.mo2_root_edit, 0, 1)
         grid.addWidget(browse_mo2_btn, 0, 2)
-        grid.addWidget(QLabel("Profile Path"), 1, 0)
-        grid.addWidget(self.profile_path_edit, 1, 1)
-        grid.addWidget(browse_profile_btn, 1, 2)
-        grid.addWidget(QLabel("Output Dir"), 2, 0)
-        grid.addWidget(self.output_dir_edit, 2, 1)
-        grid.addWidget(browse_output_btn, 2, 2)
-        grid.addWidget(QLabel("Patch Mod Name"), 3, 0)
-        grid.addWidget(self.patch_name_edit, 3, 1)
-        grid.addWidget(self.light_scale_menu_btn, 3, 2)
-        grid.addWidget(QLabel("Light Source"), 4, 0)
-        grid.addWidget(self.pl_source_combo, 4, 1)
-        grid.addWidget(self.inventory_export_btn, 4, 2)
+        grid.addWidget(QLabel("Mods Folder Override"), 1, 0)
+        grid.addWidget(self.mods_dir_edit, 1, 1)
+        grid.addWidget(browse_mods_dir_btn, 1, 2)
+        grid.addWidget(QLabel("Profile Path"), 2, 0)
+        grid.addWidget(self.profile_path_edit, 2, 1)
+        grid.addWidget(browse_profile_btn, 2, 2)
+        grid.addWidget(QLabel("Output Dir"), 3, 0)
+        grid.addWidget(self.output_dir_edit, 3, 1)
+        grid.addWidget(browse_output_btn, 3, 2)
+        grid.addWidget(QLabel("Patch Mod Name"), 4, 0)
+        grid.addWidget(self.patch_name_edit, 4, 1)
+        grid.addWidget(self.light_scale_menu_btn, 4, 2)
+        grid.addWidget(QLabel("Light Source"), 5, 0)
+        grid.addWidget(self.pl_source_combo, 5, 1)
+        grid.addWidget(self.inventory_export_btn, 5, 2)
 
         filter_row_primary = QHBoxLayout()
         filter_row_primary.addWidget(self.only_overlap_cb)
@@ -2241,21 +2266,21 @@ class MainWindow(QMainWindow):
         filter_row_primary.addWidget(self.cross_mod_duplicates_cb)
         filter_row_primary.addWidget(self.ignore_duplicate_exact_cb)
         filter_row_primary.addStretch(1)
-        grid.addLayout(filter_row_primary, 5, 0, 1, 2)
+        grid.addLayout(filter_row_primary, 6, 0, 1, 2)
 
         theme_cell = QVBoxLayout()
         theme_cell.setContentsMargins(0, 0, 0, 0)
         theme_cell.setSpacing(2)
         theme_cell.addWidget(QLabel("Theme"))
         theme_cell.addWidget(self.theme_mode_combo)
-        grid.addLayout(theme_cell, 5, 2, 1, 1, Qt.AlignRight)
+        grid.addLayout(theme_cell, 6, 2, 1, 1, Qt.AlignRight)
 
         filter_row_secondary = QHBoxLayout()
         filter_row_secondary.addWidget(self.include_overridden_files_cb)
         filter_row_secondary.addWidget(self.formid_preview_enabled_cb)
         filter_row_secondary.addWidget(self.hide_unresolved_formid_local_duplicates_cb)
         filter_row_secondary.addStretch(1)
-        grid.addLayout(filter_row_secondary, 6, 0, 1, 3)
+        grid.addLayout(filter_row_secondary, 7, 0, 1, 3)
 
         for btn in (
             self.scan_btn,
@@ -2279,7 +2304,7 @@ class MainWindow(QMainWindow):
         button_row_primary.addWidget(self.apply_overlap_disable_btn)
         button_row_primary.addWidget(self.apply_highest_duplicates_btn)
         button_row_primary.addStretch(1)
-        grid.addLayout(button_row_primary, 7, 0, 1, 3)
+        grid.addLayout(button_row_primary, 8, 0, 1, 3)
 
         return group
 
@@ -2504,9 +2529,11 @@ class MainWindow(QMainWindow):
 
     def _build_scan_config(self) -> ScanConfig:
         output_dir_text = self.output_dir_edit.text().strip()
+        mods_dir_text = self.mods_dir_edit.text().strip()
         return ScanConfig(
-            mo2_root=Path(self.mo2_root_edit.text().strip()),
+            mo2_root=Path(self.mo2_root_edit.text().strip() or "."),
             profile_path=Path(self.profile_path_edit.text().strip()),
+            mods_dir=Path(mods_dir_text) if mods_dir_text else None,
             output_dir=self._resolve_output_dir_text(output_dir_text),
             pl_source=self.pl_source_combo.currentData(),
             only_overlap=self.only_overlap_cb.isChecked(),
@@ -2581,17 +2608,34 @@ class MainWindow(QMainWindow):
         errors: list[str] = []
 
         mo2_root_text = self.mo2_root_edit.text().strip()
+        mods_dir_text = self.mods_dir_edit.text().strip()
         profile_path_text = self.profile_path_edit.text().strip()
         output_dir_text = self.output_dir_edit.text().strip()
         profile_dir = config.profile_path
+        has_mods_override = bool(mods_dir_text)
+        has_valid_mods_override = bool(
+            config.mods_dir is not None and config.mods_dir.exists() and config.mods_dir.is_dir()
+        )
         profile_is_vortex = profile_dir.exists() and profile_dir.is_dir() and (
             (profile_dir / "plugins.txt").exists() or (profile_dir / "loadorder.txt").exists()
         )
 
-        if not mo2_root_text and not profile_is_vortex:
-            errors.append("MO2 Root/Vortex mod staging folder is required for MO2 profiles.")
-        elif mo2_root_text and (not config.mo2_root.exists() or not config.mo2_root.is_dir()):
+        if not mo2_root_text and not profile_is_vortex and not has_mods_override:
+            errors.append(
+                "MO2 Root/Vortex mod staging folder is required for MO2 profiles unless Mods Folder Override is set."
+            )
+        elif (
+            mo2_root_text
+            and (not config.mo2_root.exists() or not config.mo2_root.is_dir())
+            and not has_valid_mods_override
+        ):
             errors.append(f"MO2 Root/Vortex mod staging folder does not exist or is not a folder: {config.mo2_root}")
+
+        if has_mods_override:
+            if config.mods_dir is None:
+                errors.append("Mods Folder Override is invalid.")
+            elif not config.mods_dir.exists() or not config.mods_dir.is_dir():
+                errors.append(f"Mods Folder Override does not exist or is not a folder: {config.mods_dir}")
 
         if not profile_path_text:
             errors.append("Profile Path is required.")

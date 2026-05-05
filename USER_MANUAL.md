@@ -97,10 +97,12 @@ Vortex priority note (important):
 1. Open the app.
 2. Set:
 - `MO2 Root/Vortex mod staging folder`
+- `Mods Folder Override` (optional; use only when your installed mod folders are not under the normal MO2 `mods` folder)
 - `Profile Path` (exact profile folder)
 - `Output Dir` (report output)
 3. Path selection details:
-- MO2 root example: `C:\Path\To\MO2` (contains `mods` and `profiles`).
+- MO2 root example: `C:\Path\To\MO2` (normally contains `mods` and `profiles`).
+- MO2 alternate mods folder example: set `Mods Folder Override` to `C:\Path\To\deployments` or the linked folder that directly contains installed mod folders.
 - Vortex staging folder example: `E:\modding\vortex` (the folder where deployed mod folders live).
 - MO2 profile path must contain `modlist.txt`.
 - Vortex profile path example: `C:\Users\<user>\AppData\Roaming\Vortex\skyrimse\profiles\<ProfileId>` and should contain `plugins.txt` and `loadorder.txt`.
@@ -367,7 +369,7 @@ Export creates patch files under your patch mod folder:
 
 Patch location by manager:
 
-- MO2: `<MO2 Root>\mods\<Patch Mod Name>\...`
+- MO2: `<resolved mods folder>\<Patch Mod Name>\...` (`Mods Folder Override` wins when set; otherwise MO2 config or `<MO2 Root>\mods`)
 - Vortex: `<Vortex mod staging folder>\<Patch Mod Name>\...` (or `<staging>\<game>\<Patch Mod Name>\...`, depending staging layout)
 - `Output Dir` is for reports/decision files; it is not the patch mod folder.
 
