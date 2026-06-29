@@ -139,6 +139,7 @@ class PatchWriterTests(unittest.TestCase):
             self.assertEqual(result.selected_entry_count, 1)
             self.assertEqual(len(payload), 1)
             self.assertEqual(payload[0]["models"], ["clutter\\woodfires\\campfire01landburning.nif"])
+            self.assertTrue((result.patch_mod_dir / "meshes").is_dir())
             self.assertFalse((result.patch_mod_dir / lux_file).exists())
 
     def test_write_patch_mod_preserves_unrelated_nested_fields(self) -> None:
@@ -214,6 +215,7 @@ class PatchWriterTests(unittest.TestCase):
             self.assertEqual(len(output_payload), 1)
             self.assertEqual(output_payload[0]["models"], ["a.nif", "b.nif"])
             self.assertEqual(output_payload[0]["lights"][0]["data"]["intensity"], 3.0)
+            self.assertTrue((result.patch_mod_dir / "meshes").is_dir())
 
 
 if __name__ == "__main__":

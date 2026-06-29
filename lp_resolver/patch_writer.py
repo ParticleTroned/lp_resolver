@@ -431,6 +431,7 @@ def _write_override_files(
     legacy_patch_json_path: Path | None = None,
 ) -> tuple[list[Path], int, int]:
     patch_mod_dir.mkdir(parents=True, exist_ok=True)
+    (patch_mod_dir / "meshes").mkdir(exist_ok=True)
 
     managed_files_old = _load_managed_files(managed_manifest_path)
     managed_files_new: set[str] = set()
