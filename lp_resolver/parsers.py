@@ -249,7 +249,7 @@ class LightPlacerAdapter:
 
         seen: set[tuple[str, str]] = set()
         formid_editorid_fallbacks: set[str] = set()
-        for node in _iter_dict_nodes(root):
+        for source_payload_index, node in enumerate(_iter_dict_nodes(root)):
             nif_candidates = _extract_direct_nif_candidates(node)
             form_id_candidates = _extract_direct_form_id_candidates(node)
             effect_id_candidates = _extract_direct_effect_id_candidates(node)
@@ -297,6 +297,7 @@ class LightPlacerAdapter:
                         nif_path_canonical=canonical,
                         settings=settings,
                         full_payload=dict(node),
+                        source_payload_index=source_payload_index,
                     )
                 )
 
@@ -342,6 +343,7 @@ class LightPlacerAdapter:
                         nif_path_canonical=canonical,
                         settings=settings,
                         full_payload=dict(node),
+                        source_payload_index=source_payload_index,
                     )
                 )
 
@@ -375,6 +377,7 @@ class LightPlacerAdapter:
                         nif_path_canonical=canonical,
                         settings=settings,
                         full_payload=dict(node),
+                        source_payload_index=source_payload_index,
                     )
                 )
 

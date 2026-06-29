@@ -14,6 +14,7 @@ from typing import Any
 from .decisions import Decision
 from .engine import ScanResult
 from .models import LightPlacerEntry
+from .normalize import value_signature
 from .priority import choose_keep_highest_entry, entry_priority_sort_key, is_portal_strict_entry
 from .reporting import render_markdown_report
 from .worldspace_conditions import iter_get_in_worldspace_states
@@ -24,6 +25,19 @@ LIGHT_SCALE_MANAGED_FILES_NAME = "resolver_light_scale_managed_files.json"
 LIGHT_INTENSITY_SCOPE_VALUES = {"all", "interior", "exterior"}
 _INTENSITY_KEY_EXACT = {"light", "intensity", "brightness"}
 _INTENSITY_KEY_CONTAINS = ("intensity", "brightness")
+_TARGET_KEY_PREFIXES = (
+    "nif",
+    "mesh",
+    "model",
+    "path",
+    "file",
+    "formid",
+    "visualeffect",
+    "effectshader",
+    "magiceffect",
+    "artobject",
+    "mgef",
+)
 
 
 @dataclass
@@ -61,6 +75,186 @@ class LightIntensityPatchWriteResult:
     scaled_value_count: int
     stale_removed_count: int
     warnings: list[str]
+
+
+@dataclass
+class _PayloadGroup:
+    source_payload_index: int
+    payload: dict[str, Any]
+    entries: list[LightPlacerEntry]
+
+
+@dataclass
+class _SelectedPayload:
+    payload: dict[str, Any]
+    selected_entries: list[LightPlacerEntry]
+
+
+def _target_text_variants(value: str) -> set[str]:
+    stripped = value.strip()
+    if not stripped:
+        return set()
+
+    slash_normalized = stripped.replace("\\", "/")
+    backslash_normalized = stripped.replace("/", "\\")
+    variants = {
+        stripped,
+        slash_normalized,
+        backslash_normalized,
+        stripped.lower(),
+        slash_normalized.lower(),
+        backslash_normalized.lower(),
+    }
+    return {variant for variant in variants if variant}
+
+
+def _entry_target_values(entries: list[LightPlacerEntry]) -> set[str]:
+    values: set[str] = set()
+    for entry in entries:
+        values.update(_target_text_variants(entry.nif_path_raw))
+    return values
+
+
+def _target_key_hint(key: object) -> bool:
+    key_token = _normalized_token(str(key))
+    return any(key_token.startswith(prefix) for prefix in _TARGET_KEY_PREFIXES)
+
+
+def _target_match_state(value: str, all_target_values: set[str], kept_target_values: set[str]) -> bool | None:
+    variants = _target_text_variants(value)
+    if variants.isdisjoint(all_target_values):
+        return None
+    return not variants.isdisjoint(kept_target_values)
+
+
+def _prune_unselected_targets(
+    value: Any,
+    *,
+    all_target_values: set[str],
+    kept_target_values: set[str],
+    target_context: bool = False,
+    list_context: bool = False,
+) -> tuple[Any, bool]:
+    if isinstance(value, dict):
+        pruned: dict[str, Any] = {}
+        for key, child in value.items():
+            child_context = target_context or _target_key_hint(key)
+            pruned_child, keep_child = _prune_unselected_targets(
+                child,
+                all_target_values=all_target_values,
+                kept_target_values=kept_target_values,
+                target_context=child_context,
+                list_context=False,
+            )
+            if keep_child:
+                pruned[key] = pruned_child
+        return pruned, True
+
+    if isinstance(value, list):
+        pruned_list: list[Any] = []
+        for child in value:
+            pruned_child, keep_child = _prune_unselected_targets(
+                child,
+                all_target_values=all_target_values,
+                kept_target_values=kept_target_values,
+                target_context=target_context,
+                list_context=True,
+            )
+            if keep_child:
+                pruned_list.append(pruned_child)
+        return pruned_list, True
+
+    if isinstance(value, str):
+        match_state = _target_match_state(value, all_target_values, kept_target_values)
+        if match_state is False and (target_context or (list_context and ".nif" in value.lower())):
+            return None, False
+        return value, True
+
+    return value, True
+
+
+def _payload_group_key(entry: LightPlacerEntry) -> tuple[str, int, int, str]:
+    return (
+        entry.source_mod,
+        entry.source_priority,
+        entry.source_payload_index,
+        value_signature(entry.full_payload),
+    )
+
+
+def _group_entries_by_source_payload(entries: list[LightPlacerEntry]) -> list[_PayloadGroup]:
+    groups: list[_PayloadGroup] = []
+    groups_by_key: dict[tuple[str, int, int, str], _PayloadGroup] = {}
+    for entry in entries:
+        key = _payload_group_key(entry)
+        group = groups_by_key.get(key)
+        if group is None:
+            group = _PayloadGroup(
+                source_payload_index=entry.source_payload_index,
+                payload=entry.full_payload,
+                entries=[],
+            )
+            groups_by_key[key] = group
+            groups.append(group)
+        group.entries.append(entry)
+    return groups
+
+
+def _payload_for_selected_entries(
+    *,
+    source_file: str,
+    group: _PayloadGroup,
+    selected_entry_ids: set[str],
+    warnings: list[str],
+) -> _SelectedPayload | None:
+    selected_entries = [entry for entry in group.entries if entry.entry_id in selected_entry_ids]
+    if not selected_entries:
+        return None
+
+    payload = copy.deepcopy(group.payload)
+    if len(selected_entries) == len(group.entries):
+        return _SelectedPayload(payload=payload, selected_entries=selected_entries)
+
+    all_target_values = _entry_target_values(group.entries)
+    kept_target_values = _entry_target_values(selected_entries)
+    if not kept_target_values:
+        return None
+
+    pruned_payload, keep_payload = _prune_unselected_targets(
+        payload,
+        all_target_values=all_target_values,
+        kept_target_values=kept_target_values,
+    )
+    if not keep_payload or not isinstance(pruned_payload, dict):
+        warnings.append(
+            f"{source_file}: could not rebuild payload {group.source_payload_index} after target pruning."
+        )
+        return None
+    return _SelectedPayload(payload=pruned_payload, selected_entries=selected_entries)
+
+
+def _build_selected_source_payloads(
+    *,
+    source_file: str,
+    source_entries: list[LightPlacerEntry],
+    selected_entry_ids: set[str],
+    warnings: list[str],
+) -> list[_SelectedPayload]:
+    selected_payloads: list[_SelectedPayload] = []
+    for group in _group_entries_by_source_payload(source_entries):
+        selected_payload = _payload_for_selected_entries(
+            source_file=source_file,
+            group=group,
+            selected_entry_ids=selected_entry_ids,
+            warnings=warnings,
+        )
+        if selected_payload is not None:
+            selected_payloads.append(selected_payload)
+    return selected_payloads
+
+
+def _selected_payload_entry_count(selected_payloads: list[_SelectedPayload]) -> int:
+    return sum(len(selected_payload.selected_entries) for selected_payload in selected_payloads)
 
 
 def _select_entry_for_decision(
@@ -398,15 +592,23 @@ def write_patch_mod(
     ) = _build_entry_selection_state(scan_result, decisions, warnings)
 
     changed_source_payloads: dict[str, list[dict[str, Any]]] = {}
+    exported_entry_count = 0
     for source_file, source_entries_effective in lp_entries_by_source_file_effective.items():
         original_ids = [entry.entry_id for entry in source_entries_effective]
         source_entries_all = lp_entries_by_source_file_all[source_file]
         kept_entries = [entry for entry in source_entries_all if entry.entry_id in selected_entry_ids]
         kept_ids = [entry.entry_id for entry in kept_entries]
         if kept_ids != original_ids:
-            changed_source_payloads[source_file] = [entry.full_payload for entry in kept_entries]
+            selected_payloads = _build_selected_source_payloads(
+                source_file=source_file,
+                source_entries=source_entries_all,
+                selected_entry_ids=selected_entry_ids,
+                warnings=warnings,
+            )
+            changed_source_payloads[source_file] = [item.payload for item in selected_payloads]
+            exported_entry_count += _selected_payload_entry_count(selected_payloads)
 
-    override_files, exported_entry_count, stale_removed_count = _write_override_files(
+    override_files, _exported_payload_count, stale_removed_count = _write_override_files(
         patch_mod_dir=patch_mod_dir,
         patch_mod_name=patch_mod_name,
         managed_manifest_path=managed_manifest_path,
@@ -482,29 +684,40 @@ def write_light_intensity_patch_mod(
     ) = _build_entry_selection_state(scan_result, decisions, warnings)
 
     scaled_payloads_by_source_file: dict[str, list[dict[str, Any]]] = {}
+    exported_entry_count = 0
     eligible_entry_count = 0
     scaled_entry_count = 0
     scaled_value_count = 0
     for source_file in lp_entries_by_source_file_effective:
         source_entries_all = lp_entries_by_source_file_all[source_file]
-        kept_entries = [entry for entry in source_entries_all if entry.entry_id in selected_entry_ids]
         output_payload: list[dict[str, Any]] = []
-        for entry in kept_entries:
-            entry_payload = copy.deepcopy(entry.full_payload)
-            if _entry_matches_light_scale_filters(
-                entry,
-                worldspace_scope=worldspace_scope,
-                portal_strict_only=config.portal_strict_only,
-            ):
-                eligible_entry_count += 1
-                scaled_values_for_entry = _scale_intensity_fields_in_place(entry_payload, scale_factor)
+        selected_payloads = _build_selected_source_payloads(
+            source_file=source_file,
+            source_entries=source_entries_all,
+            selected_entry_ids=selected_entry_ids,
+            warnings=warnings,
+        )
+        exported_entry_count += _selected_payload_entry_count(selected_payloads)
+        for selected_payload in selected_payloads:
+            eligible_entries = [
+                entry
+                for entry in selected_payload.selected_entries
+                if _entry_matches_light_scale_filters(
+                    entry,
+                    worldspace_scope=worldspace_scope,
+                    portal_strict_only=config.portal_strict_only,
+                )
+            ]
+            eligible_entry_count += len(eligible_entries)
+            if eligible_entries:
+                scaled_values_for_entry = _scale_intensity_fields_in_place(selected_payload.payload, scale_factor)
                 if scaled_values_for_entry > 0:
-                    scaled_entry_count += 1
+                    scaled_entry_count += len(eligible_entries)
                     scaled_value_count += scaled_values_for_entry
-            output_payload.append(entry_payload)
+            output_payload.append(selected_payload.payload)
         scaled_payloads_by_source_file[source_file] = output_payload
 
-    override_files, exported_entry_count, stale_removed_count = _write_override_files(
+    override_files, _exported_payload_count, stale_removed_count = _write_override_files(
         patch_mod_dir=patch_mod_dir,
         patch_mod_name=patch_mod_name,
         managed_manifest_path=managed_manifest_path,

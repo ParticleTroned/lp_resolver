@@ -42,6 +42,7 @@ class LightPlacerEntry:
     nif_path_canonical: str
     settings: dict[str, Any]
     full_payload: dict[str, Any]
+    source_payload_index: int = 0
 
 
 @dataclass(frozen=True)
@@ -60,4 +61,3 @@ class Conflict:
     conflict_types: list[str]
     lp_entries: list[LightPlacerEntry] = field(default_factory=list)
     pl_targets: list[ParticleLightTarget] = field(default_factory=list)
-
