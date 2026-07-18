@@ -65,7 +65,7 @@ def export_vortex_enabled_mods(
         )
 
     vortex_root = _resolve_vortex_root(resolved_profile)
-    state, state_path = _load_vortex_state(vortex_root)
+    state, state_path = _load_vortex_state(vortex_root, resolved_profile)
     profile_id, profile_payload = _resolve_profile_from_state(state, resolved_profile)
     game_id = str(profile_payload.get("gameId", "")).strip()
     if not game_id:
@@ -154,13 +154,14 @@ def _resolve_vortex_root(profile_path: Path) -> Path:
     )
 
 
-def _load_vortex_state(vortex_root: Path) -> tuple[dict[str, Any], Path]:
+def _load_vortex_state(vortex_root: Path, profile_path: Path) -> tuple[dict[str, Any], Path]:
     candidates = _state_json_candidates(vortex_root)
     if not candidates:
         raise FileNotFoundError(
-            f"Could not find parseable Vortex JSON state backups under: {vortex_root / 'temp'}"
+            f"Could not find Vortex JSON state backups under: {vortex_root / 'temp'}"
         )
 
+    requested_profile_id = profile_path.name.strip()
     errors: list[str] = []
     for candidate in candidates:
         try:
@@ -168,12 +169,24 @@ def _load_vortex_state(vortex_root: Path) -> tuple[dict[str, Any], Path]:
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{candidate.name}: {exc}")
             continue
-        if isinstance(payload, dict):
-            return payload, candidate
-        errors.append(f"{candidate.name}: root JSON value is not an object")
+        if not isinstance(payload, dict):
+            errors.append(f"{candidate.name}: root JSON value is not an object")
+            continue
+        profiles = _vortex_profiles(payload)
+        if not profiles:
+            errors.append(f"{candidate.name}: missing persistent.profiles")
+            continue
+        if requested_profile_id not in profiles:
+            errors.append(f"{candidate.name}: missing requested profile '{requested_profile_id}'")
+            continue
+        profile_payload = _as_dict(profiles.get(requested_profile_id))
+        if not str(profile_payload.get("gameId", "")).strip():
+            errors.append(f"{candidate.name}: requested profile is missing gameId")
+            continue
+        return payload, candidate
 
     joined = "; ".join(errors[-5:])
-    raise ValueError(f"Failed to parse Vortex JSON state backup(s): {joined}")
+    raise ValueError(f"Failed to load a usable Vortex JSON state backup: {joined}")
 
 
 def _state_json_candidates(vortex_root: Path) -> list[Path]:
@@ -189,37 +202,36 @@ def _state_json_candidates(vortex_root: Path) -> list[Path]:
             if item.is_file():
                 candidates.append(item.resolve())
 
-    candidates.sort(
-        key=lambda item: (
-            item.name.lower() != "startup.json",
-            -item.stat().st_mtime_ns,
-            item.name.lower(),
-        )
-    )
+    # Vortex refreshes full backups on different schedules (for example,
+    # startup.json at launch and hourly.json while it remains open). Always
+    # prefer the freshest snapshot so changes made during the current Vortex
+    # session are not hidden by an older startup snapshot.
+    def sort_key(item: Path) -> tuple[int, str]:
+        try:
+            modified_ns = item.stat().st_mtime_ns
+        except OSError:
+            modified_ns = -1
+        return (-modified_ns, item.name.lower())
+
+    candidates.sort(key=sort_key)
     return candidates
 
 
-def _resolve_profile_from_state(state: dict[str, Any], profile_path: Path) -> tuple[str, dict[str, Any]]:
+def _vortex_profiles(state: dict[str, Any]) -> dict[str, Any]:
     persistent = _as_dict(state.get("persistent"))
-    profiles = _as_dict(persistent.get("profiles"))
+    return _as_dict(persistent.get("profiles"))
+
+
+def _resolve_profile_from_state(state: dict[str, Any], profile_path: Path) -> tuple[str, dict[str, Any]]:
+    profiles = _vortex_profiles(state)
     if not profiles:
         raise ValueError("Vortex state is missing persistent.profiles.")
 
     requested_profile_id = profile_path.name.strip()
-    if requested_profile_id and requested_profile_id in profiles:
-        payload = _as_dict(profiles.get(requested_profile_id))
-        return requested_profile_id, payload
-
-    settings = _as_dict(state.get("settings"))
-    settings_profiles = _as_dict(settings.get("profiles"))
-    active_profile_id = str(settings_profiles.get("activeProfileId", "")).strip()
-    if active_profile_id and active_profile_id in profiles:
-        payload = _as_dict(profiles.get(active_profile_id))
-        return active_profile_id, payload
-
-    first_profile_id = sorted(profiles.keys())[0]
-    payload = _as_dict(profiles.get(first_profile_id))
-    return first_profile_id, payload
+    if not requested_profile_id or requested_profile_id not in profiles:
+        raise ValueError(f"Vortex state is missing requested profile '{requested_profile_id}'.")
+    payload = _as_dict(profiles.get(requested_profile_id))
+    return requested_profile_id, payload
 
 
 def _normalize_identifier(value: str) -> str:
@@ -449,6 +461,21 @@ def _collect_enabled_mods(
             if value
         )
 
+        mod_path = mods_dir / installation_path
+        if not mod_path.exists() or not mod_path.is_dir():
+            issues.append(
+                ParseIssue(
+                    severity="warning",
+                    source_mod="__vortex__",
+                    source_file=profile_id,
+                    message=(
+                        f"Enabled mod '{installation_path}' has no staging directory; "
+                        "skipped as stale Vortex state."
+                    ),
+                )
+            )
+            continue
+
         raw_rules = mod_payload.get("rules")
         rules = [rule for rule in raw_rules if isinstance(rule, dict)] if isinstance(raw_rules, list) else []
 
@@ -464,7 +491,7 @@ def _collect_enabled_mods(
             install_time_epoch=install_time_epoch,
             rules=rules,
             file_overrides=file_overrides,
-            path=mods_dir / installation_path,
+            path=mod_path,
         )
 
     per_file_override_mods = [mod.mod_id for mod in enabled_mods.values() if mod.file_overrides]
